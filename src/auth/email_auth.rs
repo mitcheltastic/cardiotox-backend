@@ -1,0 +1,249 @@
+use axum::{
+    extract::{ConnectInfo, Query, State},
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Redirect},
+    routing::{get, post},
+    Json, Router,
+};
+use serde::Deserialize;
+use std::net::SocketAddr;
+use time::Duration;
+use tracing::error;
+use validator::Validate;
+
+use crate::{
+    auth::{
+        backend::{AuthSession, Credentials},
+        password::hash_password,
+        tokens::{consume_token, create_token},
+    },
+    error::AppError,
+    logging::audit::{extract_client_info, record_event},
+    models::user::{User, UserProfile},
+    state::AppState,
+};
+
+#[derive(Deserialize, Validate)]
+pub struct RegisterPayload {
+    #[validate(email(message = "Invalid email format"))]
+    pub email: String,
+    #[validate(length(min = 8, message = "Password must be at least 8 characters long"))]
+    pub password: String,
+    pub display_name: Option<String>,
+}
+
+async fn register(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    _auth_session: AuthSession,
+    Json(payload): Json<RegisterPayload>,
+) -> Result<impl IntoResponse, AppError> {
+    payload.validate().map_err(|e| AppError::Validation(e.to_string()))?;
+
+    let hash = hash_password(payload.password).await.map_err(AppError::Other)?;
+
+    let user: User = sqlx::query_as(
+        r#"
+        INSERT INTO users (email, password_hash, display_name)
+        VALUES ($1, $2, $3)
+        RETURNING *
+        "#,
+    )
+    .bind(&payload.email)
+    .bind(&hash)
+    .bind(&payload.display_name)
+    .fetch_one(&state.db)
+    .await?;
+
+    let (ip, ua) = extract_client_info(&headers, Some(&ConnectInfo(addr)));
+    record_event(&state.db, Some(user.id), "register", ip, ua).await;
+
+    // Phase 2: Send verification email
+    let raw_token = create_token(&state.db, user.id, "verify", Duration::days(1))
+        .await
+        .map_err(AppError::Other)?;
+
+    let verify_link = format!("{}/auth/verify?token={}", state.config.app_base_url, raw_token);
+
+    if let Err(e) = state.mailer.send_verification(&user.email, &verify_link).await {
+        error!("Failed to send verification email to {}: {:?}", user.email, e);
+    }
+
+    let profile = UserProfile::from(user);
+    Ok((StatusCode::CREATED, Json(profile)))
+}
+
+async fn login(
+    mut auth_session: AuthSession,
+    headers: HeaderMap,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    State(state): State<AppState>,
+    Json(creds): Json<Credentials>,
+) -> Result<impl IntoResponse, AppError> {
+    let user = match auth_session.authenticate(creds).await.map_err(|e| AppError::Other(anyhow::anyhow!(e)))? {
+        Some(user) => user,
+        None => {
+            let (ip, ua) = extract_client_info(&headers, Some(&ConnectInfo(addr)));
+            record_event(&state.db, None, "login_fail", ip, ua).await;
+            return Err(AppError::Unauthorized);
+        }
+    };
+
+    if !user.email_verified {
+        let (ip, ua) = extract_client_info(&headers, Some(&ConnectInfo(addr)));
+        record_event(&state.db, None, "login_fail", ip, ua).await;
+        return Err(AppError::Forbidden("email not verified".to_string()));
+    }
+
+    if let Err(e) = auth_session.login(&user).await {
+        let (ip, ua) = extract_client_info(&headers, Some(&ConnectInfo(addr)));
+        record_event(&state.db, None, "login_fail", ip, ua).await;
+        return Err(AppError::Other(anyhow::anyhow!(e)));
+    }
+
+    let (ip, ua) = extract_client_info(&headers, Some(&ConnectInfo(addr)));
+    record_event(&state.db, Some(user.id), "login_ok", ip, ua).await;
+
+    let profile = UserProfile::from(user);
+    Ok((StatusCode::OK, Json(profile)))
+}
+
+async fn logout(
+    mut auth_session: AuthSession,
+    headers: HeaderMap,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, AppError> {
+    let uid = auth_session.user.as_ref().map(|u| u.id);
+    auth_session.logout().await.map_err(|e| AppError::Other(anyhow::anyhow!(e)))?;
+
+    let (ip, ua) = extract_client_info(&headers, Some(&ConnectInfo(addr)));
+    record_event(&state.db, uid, "logout", ip, ua).await;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn me(auth_session: AuthSession) -> Result<impl IntoResponse, AppError> {
+    match auth_session.user {
+        Some(user) => {
+            let profile = UserProfile::from(user);
+            Ok((StatusCode::OK, Json(profile)))
+        }
+        None => Err(AppError::Unauthorized),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct TokenQuery {
+    pub token: String,
+}
+
+async fn verify(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Query(query): Query<TokenQuery>,
+) -> Result<impl IntoResponse, AppError> {
+    let user_id = consume_token(&state.db, &query.token, "verify")
+        .await
+        .map_err(AppError::Other)?;
+
+    match user_id {
+        Some(uid) => {
+            sqlx::query("UPDATE users SET email_verified = true WHERE id = $1")
+                .bind(uid)
+                .execute(&state.db)
+                .await?;
+
+            let (ip, ua) = extract_client_info(&headers, Some(&ConnectInfo(addr)));
+            record_event(&state.db, Some(uid), "verify", ip, ua).await;
+
+            let redirect_url = format!("{}/login?verified=1", state.config.frontend_url);
+            Ok(Redirect::to(&redirect_url).into_response())
+        }
+        None => Err(AppError::BadRequest("invalid or expired token".to_string())),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct ForgotPayload {
+    pub email: String,
+}
+
+async fn forgot_password(
+    State(state): State<AppState>,
+    Json(payload): Json<ForgotPayload>,
+) -> Result<impl IntoResponse, AppError> {
+    let user: Option<User> = sqlx::query_as("SELECT * FROM users WHERE email = $1")
+        .bind(&payload.email)
+        .fetch_optional(&state.db)
+        .await?;
+
+    if let Some(u) = user {
+        let raw_token = match create_token(&state.db, u.id, "reset", Duration::hours(1)).await {
+            Ok(t) => t,
+            Err(e) => {
+                error!("Failed to create reset token for {}: {:?}", u.email, e);
+                return Ok(StatusCode::OK);
+            }
+        };
+
+        let reset_link = format!("{}/reset-password?token={}", state.config.frontend_url, raw_token);
+
+        if let Err(e) = state.mailer.send_reset(&u.email, &reset_link).await {
+            error!("Failed to send reset email to {}: {:?}", u.email, e);
+        }
+    }
+
+    Ok(StatusCode::OK)
+}
+
+#[derive(Deserialize, Validate)]
+pub struct ResetPayload {
+    pub token: String,
+    #[validate(length(min = 8, message = "Password must be at least 8 characters long"))]
+    pub new_password: String,
+}
+
+async fn reset_password(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Json(payload): Json<ResetPayload>,
+) -> Result<impl IntoResponse, AppError> {
+    payload.validate().map_err(|e| AppError::Validation(e.to_string()))?;
+
+    let user_id = consume_token(&state.db, &payload.token, "reset")
+        .await
+        .map_err(AppError::Other)?;
+
+    match user_id {
+        Some(uid) => {
+            let hash = hash_password(payload.new_password).await.map_err(AppError::Other)?;
+
+            sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
+                .bind(hash)
+                .bind(uid)
+                .execute(&state.db)
+                .await?;
+
+            let (ip, ua) = extract_client_info(&headers, Some(&ConnectInfo(addr)));
+            record_event(&state.db, Some(uid), "reset", ip, ua).await;
+
+            Ok(StatusCode::OK)
+        }
+        None => Err(AppError::BadRequest("invalid or expired token".to_string())),
+    }
+}
+
+pub fn router() -> Router<AppState> {
+    Router::new()
+        .route("/register", post(register))
+        .route("/login", post(login))
+        .route("/logout", post(logout))
+        .route("/me", get(me))
+        .route("/verify", get(verify))
+        .route("/password/forgot", post(forgot_password))
+        .route("/password/reset", post(reset_password))
+}
