@@ -92,9 +92,12 @@ async fn main() -> anyhow::Result<()> {
     // CSRF Note: We do not add a separate CSRF token. CORS is locked to the exact frontend origin 
     // with credentials. State-changing routes are POST with application/json (forces preflight).
     // The CORS allowlist + JSON-only + credentialed-preflight provides robust protection against CSRF.
-    let frontend_origin: axum::http::HeaderValue = config.frontend_origin.parse()?;
+    let origins = config.frontend_origin.iter()
+        .map(|o| o.parse::<axum::http::HeaderValue>())
+        .collect::<Result<Vec<_>, _>>()?;
+
     let cors_layer = CorsLayer::new()
-        .allow_origin(frontend_origin)
+        .allow_origin(tower_http::cors::AllowOrigin::list(origins))
         .allow_credentials(true)
         .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
         .allow_headers([axum::http::header::CONTENT_TYPE]);

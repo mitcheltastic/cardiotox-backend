@@ -16,7 +16,7 @@ pub struct Config {
     pub google_client_id: String,
     pub google_client_secret: String,
     pub google_redirect_url: String,
-    pub frontend_origin: String,
+    pub frontend_origin: Vec<String>,
     pub cookie_samesite: String,
     pub hf_space_base: String,
 }
@@ -47,7 +47,18 @@ impl Config {
         let google_client_id = env::var("GOOGLE_CLIENT_ID").context("GOOGLE_CLIENT_ID must be set in the environment")?;
         let google_client_secret = env::var("GOOGLE_CLIENT_SECRET").context("GOOGLE_CLIENT_SECRET must be set in the environment")?;
         let google_redirect_url = env::var("GOOGLE_REDIRECT_URL").context("GOOGLE_REDIRECT_URL must be set in the environment")?;
-        let frontend_origin = env::var("FRONTEND_ORIGIN").context("FRONTEND_ORIGIN must be set in the environment")?;
+        
+        let frontend_origin_raw = env::var("FRONTEND_ORIGIN").context("FRONTEND_ORIGIN must be set in the environment")?;
+        let frontend_origin: Vec<String> = frontend_origin_raw
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        if frontend_origin.is_empty() {
+            anyhow::bail!("FRONTEND_ORIGIN must contain at least one valid origin");
+        }
+
         let cookie_samesite = env::var("COOKIE_SAMESITE").unwrap_or_else(|_| "lax".to_string());
         let hf_space_base = env::var("HF_SPACE_BASE").context("HF_SPACE_BASE must be set in the environment")?;
 

@@ -118,11 +118,21 @@ async fn explain(
     let result = call_gradio(&state.http_client, &state.config.hf_space_base, "explain", &data_val).await?;
     let elapsed = start.elapsed().as_millis() as i32;
 
-    let predicted_tier = result.as_array()
+    let predicted_class = result.as_array()
         .and_then(|arr| arr.get(0))
         .and_then(|v| v.get("predicted_class"))
         .and_then(|v| v.as_str())
         .map(normalize_tier);
+
+    let base_value = result.as_array()
+        .and_then(|arr| arr.get(0))
+        .and_then(|v| v.get("base_value"))
+        .and_then(|v| v.as_f64());
+
+    let contributions = result.as_array()
+        .and_then(|arr| arr.get(0))
+        .and_then(|v| v.get("contributions"))
+        .cloned();
 
     let input_json = serde_json::to_value(&payload.data).unwrap();
 
@@ -130,13 +140,16 @@ async fn explain(
     tokio::spawn(async move {
         let res = sqlx::query(
             r#"
-            INSERT INTO prediction_logs (user_id, input, predicted_tier, latency_ms)
-            VALUES ($1, $2, $3, $4)
+            INSERT INTO shap_logs (user_id, prediction_id, input, predicted_class, base_value, contributions, latency_ms)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             "#,
         )
         .bind(user.id)
+        .bind(None::<uuid::Uuid>)
         .bind(&input_json)
-        .bind(&predicted_tier)
+        .bind(&predicted_class)
+        .bind(base_value)
+        .bind(&contributions)
         .bind(elapsed)
         .execute(&db)
         .await;
