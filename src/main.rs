@@ -75,11 +75,11 @@ async fn main() -> anyhow::Result<()> {
     let backend = Backend { db: db.clone() };
     let auth_layer = AuthManagerLayerBuilder::new(backend, session_layer).build();
 
-    let mailer = Mailer::new(&config)?;
-
     let http_client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()?;
+
+    let mailer = Mailer::new(&config, http_client.clone())?;
 
     // 6. Build app state
     let state = AppState {

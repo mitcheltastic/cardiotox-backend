@@ -11,7 +11,7 @@ axum-login = "^0.18"
 dotenvy = "^0.15"
 futures-util = "0.3.32"
 hex = "0.4.3"
-lettre = { version = "0.11.22", default-features = false, features = ["tokio1-rustls-tls", "smtp-transport", "builder"] }
+
 oauth2 = { version = "^5", default-features = false, features = ["reqwest", "rustls-tls"] }
 rand = "0.10.2"
 reqwest = { version = "^0.12", default-features = false, features = ["json", "rustls-tls"] }

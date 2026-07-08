@@ -1,53 +1,74 @@
 use anyhow::{Context, Result};
-use lettre::{
-    message::Mailbox,
-    transport::smtp::authentication::Credentials,
-    AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
-};
-use tracing::info;
+use reqwest::Client;
+use serde_json::json;
+use tracing::{error, info};
 use crate::config::Config;
 
 #[derive(Clone)]
 pub struct Mailer {
-    transport: AsyncSmtpTransport<Tokio1Executor>,
-    from: Mailbox,
+    client: Client,
+    api_key: String,
+    from: String,
 }
 
 impl Mailer {
-    pub fn new(config: &Config) -> Result<Self> {
-        let creds = Credentials::new(config.smtp_user.clone(), config.smtp_pass.clone());
-        let transport = AsyncSmtpTransport::<Tokio1Executor>::relay(&config.smtp_host)?
-            .port(config.smtp_port)
-            .credentials(creds)
-            .build();
+    pub fn new(config: &Config, client: Client) -> Result<Self> {
+        let from = config.email_from.clone();
+        if from.is_empty() {
+            anyhow::bail!("Invalid EMAIL_FROM format");
+        }
         
-        let from: Mailbox = config.email_from.parse().context("Invalid EMAIL_FROM format")?;
-        
-        Ok(Self { transport, from })
+        Ok(Self { 
+            client,
+            api_key: config.resend_api_key.clone(),
+            from,
+        })
+    }
+
+    async fn send_resend(&self, to: &str, subject: &str, html: &str) -> Result<()> {
+        let payload = json!({
+            "from": self.from,
+            "to": [to],
+            "subject": subject,
+            "html": html,
+        });
+
+        let res = self.client.post("https://api.resend.com/emails")
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .json(&payload)
+            .send()
+            .await;
+
+        match res {
+            Ok(response) => {
+                if !response.status().is_success() {
+                    let status = response.status();
+                    let text = response.text().await.unwrap_or_default();
+                    error!("Resend API error: {} - {}", status, text);
+                }
+            }
+            Err(e) => {
+                error!("Failed to send email request to Resend: {:?}", e);
+            }
+        }
+        Ok(())
     }
 
     pub async fn send_verification(&self, to: &str, verify_link: &str) -> Result<()> {
-        let to_mailbox: Mailbox = to.parse()?;
-        let msg = Message::builder()
-            .from(self.from.clone())
-            .to(to_mailbox)
-            .subject("Verify your email")
-            .body(format!("Please verify your email by clicking the link below:\n\n{}", verify_link))?;
+        let subject = "Verify your email";
+        let html = format!("Please verify your email by clicking the link below:<br><br><a href=\"{}\">{}</a>", verify_link, verify_link);
 
-        self.transport.send(msg).await?;
+        self.send_resend(to, subject, &html).await?;
         info!("Verification email sent");
         Ok(())
     }
 
     pub async fn send_reset(&self, to: &str, reset_link: &str) -> Result<()> {
-        let to_mailbox: Mailbox = to.parse()?;
-        let msg = Message::builder()
-            .from(self.from.clone())
-            .to(to_mailbox)
-            .subject("Password Reset")
-            .body(format!("You requested a password reset. Click the link below to reset it:\n\n{}", reset_link))?;
+        let subject = "Password Reset";
+        let html = format!("You requested a password reset. Click the link below to reset it:<br><br><a href=\"{}\">{}</a>", reset_link, reset_link);
 
-        self.transport.send(msg).await?;
+        self.send_resend(to, subject, &html).await?;
         info!("Password reset email sent");
         Ok(())
     }

@@ -6,10 +6,7 @@ pub struct Config {
     pub database_url: String,
     pub port: u16,
     pub cookie_secure: bool,
-    pub smtp_host: String,
-    pub smtp_port: u16,
-    pub smtp_user: String,
-    pub smtp_pass: String,
+    pub resend_api_key: String,
     pub email_from: String,
     pub app_base_url: String,
     pub frontend_url: String,
@@ -34,13 +31,7 @@ impl Config {
             .parse()
             .unwrap_or(false);
 
-        let smtp_host = env::var("SMTP_HOST").context("SMTP_HOST must be set in the environment")?;
-        let smtp_port = env::var("SMTP_PORT")
-            .unwrap_or_else(|_| "465".to_string())
-            .parse()
-            .context("SMTP_PORT must be a valid u16 integer")?;
-        let smtp_user = env::var("SMTP_USER").context("SMTP_USER must be set in the environment")?;
-        let smtp_pass = env::var("SMTP_PASS").context("SMTP_PASS must be set in the environment")?;
+        let resend_api_key = env::var("RESEND_API_KEY").context("RESEND_API_KEY must be set in the environment")?;
         let email_from = env::var("EMAIL_FROM").context("EMAIL_FROM must be set in the environment")?;
         let app_base_url = env::var("APP_BASE_URL").context("APP_BASE_URL must be set in the environment")?;
         let frontend_url = env::var("FRONTEND_URL").context("FRONTEND_URL must be set in the environment")?;
@@ -66,10 +57,7 @@ impl Config {
             database_url,
             port,
             cookie_secure,
-            smtp_host,
-            smtp_port,
-            smtp_user,
-            smtp_pass,
+            resend_api_key,
             email_from,
             app_base_url,
             frontend_url,
@@ -81,4 +69,5 @@ impl Config {
             hf_space_base,
         })
     }
+
 }
