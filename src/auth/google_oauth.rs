@@ -43,7 +43,7 @@ async fn google_auth(
                 .map_err(|e| AppError::Other(anyhow::anyhow!(e)))?,
         )
         .set_redirect_uri(
-            RedirectUrl::new(state.config.google_redirect_url.clone())
+            RedirectUrl::new(format!("{}/api/auth/google/callback", state.config.frontend_url))
                 .map_err(|e| AppError::Other(anyhow::anyhow!(e)))?,
         );
 
@@ -125,7 +125,7 @@ async fn google_callback(
                 .map_err(|e| AppError::Other(anyhow::anyhow!(e)))?,
         )
         .set_redirect_uri(
-            RedirectUrl::new(state.config.google_redirect_url.clone())
+            RedirectUrl::new(format!("{}/api/auth/google/callback", state.config.frontend_url))
                 .map_err(|e| AppError::Other(anyhow::anyhow!(e)))?,
         );
 
@@ -227,7 +227,7 @@ async fn google_callback(
     let (ip, ua) = extract_client_info(&headers, Some(&ConnectInfo(addr)));
     record_event(&state.db, Some(user.id), "oauth_login", ip, ua).await;
 
-    let frontend_success_url = format!("{}/?login=success", state.config.frontend_url);
+    let frontend_success_url = format!("{}/login?login=success", state.config.frontend_url);
     Ok(Redirect::to(&frontend_success_url).into_response())
 }
 
