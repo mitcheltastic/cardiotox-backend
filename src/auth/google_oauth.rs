@@ -69,6 +69,12 @@ async fn google_auth(
         .await
         .map_err(|e| AppError::Other(anyhow::anyhow!(e)))?;
 
+    auth_session
+        .session
+        .flush()
+        .await
+        .map_err(|e| AppError::Other(anyhow::anyhow!("Failed to save session state: {}", e)))?;
+
     let mut response = Redirect::to(auth_url.as_str()).into_response();
     response.headers_mut().insert(
         axum::http::header::CACHE_CONTROL,
