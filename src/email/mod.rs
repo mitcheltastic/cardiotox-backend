@@ -100,31 +100,32 @@ fn base_html_template(title: &str, text: &str, button_text: &str, link: &str, no
 <head>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
-<body style="background-color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; font-size: 16px; line-height: 1.5; margin: 0; padding: 0; -ms-text-size-adjust: 100%; -webkit-text-size-adjust: 100%;">
-    <table border="0" cellpadding="0" cellspacing="0" class="body" style="border-collapse: separate; mso-table-lspace: 0pt; mso-table-rspace: 0pt; width: 100%; background-color: #f8fafc;">
+<body style="background-color: #FCFAFA; font-family: 'Figtree', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; font-size: 16px; line-height: 1.5; margin: 0; padding: 0; -ms-text-size-adjust: 100%; -webkit-text-size-adjust: 100%;">
+    <table border="0" cellpadding="0" cellspacing="0" class="body" style="border-collapse: separate; mso-table-lspace: 0pt; mso-table-rspace: 0pt; width: 100%; background-color: #FCFAFA;">
         <tr>
-            <td style="font-family: sans-serif; font-size: 16px; vertical-align: top;">&nbsp;</td>
-            <td class="container" style="font-family: sans-serif; font-size: 16px; vertical-align: top; display: block; max-width: 600px; padding: 40px 20px; width: 600px; margin: 0 auto;">
+            <td style="font-family: 'Figtree', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 16px; vertical-align: top;">&nbsp;</td>
+            <td class="container" style="font-family: 'Figtree', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 16px; vertical-align: top; display: block; max-width: 600px; padding: 40px 20px; width: 600px; margin: 0 auto;">
                 <div class="content" style="box-sizing: border-box; display: block; margin: 0 auto; max-width: 600px;">
-                    <table class="main" style="border-collapse: separate; mso-table-lspace: 0pt; mso-table-rspace: 0pt; width: 100%; background: #ffffff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                    <table class="main" style="border-collapse: separate; mso-table-lspace: 0pt; mso-table-rspace: 0pt; width: 100%; background: #FFFFFF; border: 1px solid #e2e8f0; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
                         <tr>
-                            <td class="wrapper" style="font-family: sans-serif; font-size: 16px; vertical-align: top; box-sizing: border-box; padding: 40px;">
+                            <td class="wrapper" style="font-family: 'Figtree', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 16px; vertical-align: top; box-sizing: border-box; padding: 40px;">
                                 <table border="0" cellpadding="0" cellspacing="0" style="border-collapse: separate; mso-table-lspace: 0pt; mso-table-rspace: 0pt; width: 100%;">
                                     <tr>
-                                        <td style="font-family: sans-serif; font-size: 16px; vertical-align: top;">
-                                            <h2 style="color: #0f172a; font-family: sans-serif; font-weight: 600; line-height: 1.4; margin: 0; margin-bottom: 24px; font-size: 24px; text-align: center; letter-spacing: -0.5px;">Cardiotox</h2>
-                                            <h3 style="color: #334155; font-family: sans-serif; font-weight: 500; line-height: 1.4; margin: 0; margin-bottom: 16px; font-size: 18px;">{title}</h3>
-                                            <p style="font-family: sans-serif; font-size: 16px; font-weight: normal; margin: 0; margin-bottom: 24px; color: #475569;">{text}</p>
+                                        <td style="font-family: 'Figtree', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 16px; vertical-align: top;">
+                                            <h2 style="color: #2B2223; font-weight: 700; line-height: 1.4; margin: 0; margin-bottom: 24px; font-size: 24px; text-align: center; letter-spacing: -0.5px;">Cardivex</h2>
+                                            <h3 style="color: #2B2223; font-weight: 600; line-height: 1.4; margin: 0; margin-bottom: 16px; font-size: 18px;">{title}</h3>
+                                            <p style="font-weight: 400; margin: 0; margin-bottom: 24px; color: #2B2223;">{text}</p>
                                             <table border="0" cellpadding="0" cellspacing="0" class="btn btn-primary" style="border-collapse: separate; mso-table-lspace: 0pt; mso-table-rspace: 0pt; width: 100%; box-sizing: border-box;">
                                                 <tbody>
                                                     <tr>
-                                                        <td align="left" style="font-family: sans-serif; font-size: 16px; vertical-align: top; padding-bottom: 24px;">
+                                                        <td align="left" style="font-family: 'Figtree', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 16px; vertical-align: top; padding-bottom: 24px;">
                                                             <table border="0" cellpadding="0" cellspacing="0" style="border-collapse: separate; mso-table-lspace: 0pt; mso-table-rspace: 0pt; width: auto;">
                                                                 <tbody>
                                                                     <tr>
-                                                                        <td style="font-family: sans-serif; font-size: 16px; vertical-align: top; border-radius: 6px; text-align: center; background-color: #2563eb;">
-                                                                            <a href="{link}" target="_blank" style="border: solid 1px #2563eb; border-radius: 6px; box-sizing: border-box; cursor: pointer; display: inline-block; font-size: 15px; font-weight: 600; margin: 0; padding: 12px 24px; text-decoration: none; background-color: #2563eb; border-color: #2563eb; color: #ffffff;">{button_text}</a>
+                                                                        <td style="font-family: 'Figtree', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 16px; vertical-align: top; border-radius: 6px; text-align: center; background-color: #BA3B46;">
+                                                                            <a href="{link}" target="_blank" style="border: solid 1px #8F2D36; border-radius: 6px; box-sizing: border-box; cursor: pointer; display: inline-block; font-size: 15px; font-weight: 600; margin: 0; padding: 12px 24px; text-decoration: none; background-color: #BA3B46; color: #FFFFFF;">{button_text}</a>
                                                                         </td>
                                                                     </tr>
                                                                 </tbody>
@@ -133,8 +134,8 @@ fn base_html_template(title: &str, text: &str, button_text: &str, link: &str, no
                                                     </tr>
                                                 </tbody>
                                             </table>
-                                            <p style="font-family: sans-serif; font-size: 14px; font-weight: normal; margin: 0; margin-bottom: 16px; color: #64748b;">Or paste this link into your browser:<br><a href="{link}" style="color: #2563eb; text-decoration: none; word-break: break-all;">{link}</a></p>
-                                            <p style="font-family: sans-serif; font-size: 13px; font-weight: normal; margin: 0; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 16px; margin-top: 24px;">{note}</p>
+                                            <p style="font-size: 14px; font-weight: 400; margin: 0; margin-bottom: 16px; color: #786B6C;">Or paste this link into your browser:<br><a href="{link}" style="color: #BA3B46; text-decoration: none; word-break: break-all;">{link}</a></p>
+                                            <p style="font-size: 13px; font-weight: 400; margin: 0; color: #786B6C; border-top: 1px solid #e2e8f0; padding-top: 16px; margin-top: 24px;">{note}</p>
                                         </td>
                                     </tr>
                                 </table>
@@ -143,7 +144,7 @@ fn base_html_template(title: &str, text: &str, button_text: &str, link: &str, no
                     </table>
                 </div>
             </td>
-            <td style="font-family: sans-serif; font-size: 16px; vertical-align: top;">&nbsp;</td>
+            <td style="font-family: 'Figtree', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 16px; vertical-align: top;">&nbsp;</td>
         </tr>
     </table>
 </body>
@@ -169,7 +170,7 @@ fn verification_html(link: &str) -> String {
 fn reset_html(link: &str) -> String {
     base_html_template(
         "Reset your password",
-        "You recently requested to reset your password for your Cardiotox account. Click the button below to proceed.",
+        "You recently requested to reset your password for your Cardivex account. Click the button below to proceed.",
         "Reset password",
         link,
         "This link will expire in 1 hour. If you didn't request a password reset, you can safely ignore this email."
@@ -183,28 +184,29 @@ fn action_code_html(action_label: &str, code: &str) -> String {
 <head>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
-<body style="background-color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; font-size: 16px; line-height: 1.5; margin: 0; padding: 0; -ms-text-size-adjust: 100%; -webkit-text-size-adjust: 100%;">
-    <table border="0" cellpadding="0" cellspacing="0" class="body" style="border-collapse: separate; mso-table-lspace: 0pt; mso-table-rspace: 0pt; width: 100%; background-color: #f8fafc;">
+<body style="background-color: #FCFAFA; font-family: 'Figtree', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; font-size: 16px; line-height: 1.5; margin: 0; padding: 0; -ms-text-size-adjust: 100%; -webkit-text-size-adjust: 100%;">
+    <table border="0" cellpadding="0" cellspacing="0" class="body" style="border-collapse: separate; mso-table-lspace: 0pt; mso-table-rspace: 0pt; width: 100%; background-color: #FCFAFA;">
         <tr>
-            <td style="font-family: sans-serif; font-size: 16px; vertical-align: top;">&nbsp;</td>
-            <td class="container" style="font-family: sans-serif; font-size: 16px; vertical-align: top; display: block; max-width: 600px; padding: 40px 20px; width: 600px; margin: 0 auto;">
+            <td style="font-family: 'Figtree', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 16px; vertical-align: top;">&nbsp;</td>
+            <td class="container" style="font-family: 'Figtree', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 16px; vertical-align: top; display: block; max-width: 600px; padding: 40px 20px; width: 600px; margin: 0 auto;">
                 <div class="content" style="box-sizing: border-box; display: block; margin: 0 auto; max-width: 600px;">
-                    <table class="main" style="border-collapse: separate; mso-table-lspace: 0pt; mso-table-rspace: 0pt; width: 100%; background: #ffffff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                    <table class="main" style="border-collapse: separate; mso-table-lspace: 0pt; mso-table-rspace: 0pt; width: 100%; background: #FFFFFF; border: 1px solid #e2e8f0; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
                         <tr>
-                            <td class="wrapper" style="font-family: sans-serif; font-size: 16px; vertical-align: top; box-sizing: border-box; padding: 40px;">
+                            <td class="wrapper" style="font-family: 'Figtree', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 16px; vertical-align: top; box-sizing: border-box; padding: 40px;">
                                 <table border="0" cellpadding="0" cellspacing="0" style="border-collapse: separate; mso-table-lspace: 0pt; mso-table-rspace: 0pt; width: 100%;">
                                     <tr>
-                                        <td style="font-family: sans-serif; font-size: 16px; vertical-align: top; text-align: center;">
-                                            <h2 style="color: #0f172a; font-family: sans-serif; font-weight: 600; line-height: 1.4; margin: 0; margin-bottom: 24px; font-size: 24px; letter-spacing: -0.5px;">Cardiotox</h2>
-                                            <h3 style="color: #334155; font-family: sans-serif; font-weight: 500; line-height: 1.4; margin: 0; margin-bottom: 16px; font-size: 18px;">{}</h3>
-                                            <p style="font-family: sans-serif; font-size: 16px; font-weight: normal; margin: 0; margin-bottom: 24px; color: #475569;">Please use the following 6-digit code to complete your request:</p>
+                                        <td style="font-family: 'Figtree', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 16px; vertical-align: top; text-align: center;">
+                                            <h2 style="color: #2B2223; font-weight: 700; line-height: 1.4; margin: 0; margin-bottom: 24px; font-size: 24px; letter-spacing: -0.5px;">Cardivex</h2>
+                                            <h3 style="color: #2B2223; font-weight: 600; line-height: 1.4; margin: 0; margin-bottom: 16px; font-size: 18px;">{}</h3>
+                                            <p style="font-weight: 400; margin: 0; margin-bottom: 24px; color: #2B2223;">Please use the following 6-digit code to complete your request:</p>
                                             
-                                            <div style="background-color: #f1f5f9; border-radius: 8px; padding: 24px; margin-bottom: 24px;">
-                                                <h1 style="font-family: 'Courier New', Courier, monospace; font-size: 40px; font-weight: 700; margin: 0; color: #0f172a; letter-spacing: 4px;">{}</h1>
+                                            <div style="background-color: #FCFAFA; border: 1px solid #e2e8f0; border-radius: 8px; padding: 24px; margin-bottom: 24px;">
+                                                <h1 style="font-family: monospace; font-size: 40px; font-weight: 700; margin: 0; color: #BA3B46; letter-spacing: 6px;">{}</h1>
                                             </div>
 
-                                            <p style="font-family: sans-serif; font-size: 13px; font-weight: normal; margin: 0; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 16px; margin-top: 24px;">This code expires in 10 minutes. If you didn't request this, you can safely ignore this email.</p>
+                                            <p style="font-size: 13px; font-weight: 400; margin: 0; color: #786B6C; border-top: 1px solid #e2e8f0; padding-top: 16px; margin-top: 24px;">This code expires in 10 minutes. If you didn't request this, you can safely ignore this email.</p>
                                         </td>
                                     </tr>
                                 </table>
@@ -213,7 +215,7 @@ fn action_code_html(action_label: &str, code: &str) -> String {
                     </table>
                 </div>
             </td>
-            <td style="font-family: sans-serif; font-size: 16px; vertical-align: top;">&nbsp;</td>
+            <td style="font-family: 'Figtree', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 16px; vertical-align: top;">&nbsp;</td>
         </tr>
     </table>
 </body>
