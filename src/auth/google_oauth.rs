@@ -167,9 +167,6 @@ async fn google_callback(
         }
     };
 
-    auth_session.session.remove::<serde_json::Value>("csrf_state").await.ok();
-    auth_session.session.remove::<serde_json::Value>("pkce_verifier").await.ok();
-
     let client = BasicClient::new(ClientId::new(state.config.google_client_id.clone()))
         .set_client_secret(ClientSecret::new(state.config.google_client_secret.clone()))
         .set_auth_uri(
@@ -316,6 +313,9 @@ async fn google_callback(
             warn!("Session login error branch triggered");
             AppError::Other(anyhow::anyhow!("Session login failed: {:?}", e))
         })?;
+
+    auth_session.session.remove::<serde_json::Value>("csrf_state").await.ok();
+    auth_session.session.remove::<serde_json::Value>("pkce_verifier").await.ok();
 
     let (ip, ua) = extract_client_info(&headers, Some(&ConnectInfo(addr)));
     record_event(&state.db, Some(user.id), "oauth_login", ip, ua).await;
