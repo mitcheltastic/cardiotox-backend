@@ -11,6 +11,7 @@ use oauth2::{
 };
 use serde::Deserialize;
 use std::net::SocketAddr;
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::{
@@ -75,6 +76,12 @@ async fn google_auth(
         .await
         .map_err(|e| AppError::Other(anyhow::anyhow!("Failed to save session state: {}", e)))?;
 
+    if let Some(session_id) = auth_session.session.id() {
+        info!("GET /auth/google (start): Session ID = {}", session_id);
+    } else {
+        info!("GET /auth/google (start): Session ID = None");
+    }
+
     let mut response = Redirect::to(auth_url.as_str()).into_response();
     response.headers_mut().insert(
         axum::http::header::CACHE_CONTROL,
@@ -108,23 +115,63 @@ async fn google_callback(
     mut auth_session: AuthSession,
     Query(query): Query<AuthCallbackQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    let stored_csrf: Option<String> = auth_session
+    info!("GET /auth/google/callback HIT. state len: {}, code len: {}", query.state.len(), query.code.len());
+
+    if let Some(session_id) = auth_session.session.id() {
+        info!("Callback Session ID = {}", session_id);
+    } else {
+        info!("Callback Session ID = None");
+    }
+
+    let stored_csrf: Result<Option<String>, _> = auth_session
         .session
         .get("csrf_state")
-        .await
-        .map_err(|e| AppError::Other(anyhow::anyhow!(e)))?;
+        .await;
 
-    let stored_pkce: Option<String> = auth_session
+    let stored_pkce: Result<Option<String>, _> = auth_session
         .session
         .get("pkce_verifier")
-        .await
-        .map_err(|e| AppError::Other(anyhow::anyhow!(e)))?;
+        .await;
 
-    if stored_csrf.as_deref() != Some(&query.state) {
+    let stored_csrf = match stored_csrf {
+        Ok(v) => {
+            info!("session csrf_state: {}", if v.is_some() { "present" } else { "ABSENT" });
+            v
+        },
+        Err(e) => {
+            error!("Failed to get csrf_state from session: {}", e);
+            warn!("Session state read error branch triggered");
+            return Err(AppError::Other(anyhow::anyhow!(e)));
+        }
+    };
+
+    let stored_pkce = match stored_pkce {
+        Ok(v) => {
+            info!("session pkce_verifier: {}", if v.is_some() { "present" } else { "ABSENT" });
+            v
+        },
+        Err(e) => {
+            error!("Failed to get pkce_verifier from session: {}", e);
+            warn!("Session pkce read error branch triggered");
+            return Err(AppError::Other(anyhow::anyhow!(e)));
+        }
+    };
+
+    let state_matches = stored_csrf.as_deref() == Some(&query.state);
+    info!("State comparison: {}", if state_matches { "matched" } else { "MISMATCH" });
+
+    if !state_matches {
+        warn!("State mismatch error branch triggered");
         return Err(AppError::Unauthorized);
     }
 
-    let pkce_secret = stored_pkce.ok_or(AppError::Unauthorized)?;
+    let pkce_secret = match stored_pkce {
+        Some(s) => s,
+        None => {
+            warn!("PKCE verifier missing error branch triggered");
+            return Err(AppError::Unauthorized);
+        }
+    };
 
     auth_session.session.remove::<serde_json::Value>("csrf_state").await.ok();
     auth_session.session.remove::<serde_json::Value>("pkce_verifier").await.ok();
@@ -151,7 +198,11 @@ async fn google_callback(
         .set_pkce_verifier(PkceCodeVerifier::new(pkce_secret))
         .request_async(&http)
         .await
-        .map_err(|e| AppError::Other(anyhow::anyhow!("Token exchange failed: {}", e)))?;
+        .map_err(|e| {
+            error!("Token exchange failed with error: {:?}", e);
+            warn!("Token exchange error branch triggered");
+            AppError::Other(anyhow::anyhow!("Token exchange failed: {}", e))
+        })?;
 
     let user_info_res = http
         .get("https://openidconnect.googleapis.com/v1/userinfo")
@@ -161,18 +212,42 @@ async fn google_callback(
         )
         .send()
         .await
-        .map_err(|e| AppError::Other(anyhow::anyhow!("Userinfo request failed: {}", e)))?;
+        .map_err(|e| {
+            error!("Userinfo request failed with error: {:?}", e);
+            warn!("Userinfo fetch error branch triggered");
+            AppError::Other(anyhow::anyhow!("Userinfo request failed: {}", e))
+        })?;
+
+    let status = user_info_res.status();
+    info!("Userinfo fetch HTTP status: {}", status);
+    
+    if !status.is_success() {
+        let body = user_info_res.text().await.unwrap_or_else(|_| "Failed to read body".to_string());
+        error!("Userinfo request failed. Response body: {}", body);
+        warn!("Userinfo fetch non-success error branch triggered");
+        return Err(AppError::Other(anyhow::anyhow!("Userinfo request returned non-success: {}", body)));
+    }
 
     let user_info: GoogleUserInfo = user_info_res
         .json()
         .await
-        .map_err(|e| AppError::Other(anyhow::anyhow!("Userinfo parse failed: {}", e)))?;
+        .map_err(|e| {
+            error!("Userinfo parse failed with error: {:?}", e);
+            warn!("Userinfo parse error branch triggered");
+            AppError::Other(anyhow::anyhow!("Userinfo parse failed: {}", e))
+        })?;
+
+    info!("Email verified: {}", user_info.email_verified);
 
     if !user_info.email_verified {
+        warn!("Email not verified error branch triggered");
         return Err(AppError::BadRequest("Google email not verified".into()));
     }
 
-    let mut tx = state.db.begin().await.map_err(AppError::Database)?;
+    let mut tx = state.db.begin().await.map_err(|e| {
+        warn!("DB begin error branch triggered");
+        AppError::Database(e)
+    })?;
 
     let oauth_account: Option<Uuid> = sqlx::query_scalar(
         "SELECT user_id FROM oauth_accounts WHERE provider = 'google' AND provider_user_id = $1",
@@ -180,7 +255,10 @@ async fn google_callback(
     .bind(&user_info.sub)
     .fetch_optional(&mut *tx)
     .await
-    .map_err(AppError::Database)?;
+    .map_err(|e| {
+        warn!("DB select oauth_account error branch triggered");
+        AppError::Database(e)
+    })?;
 
     let user: User = if let Some(user_id) = oauth_account {
         sqlx::query_as("SELECT * FROM users WHERE id = $1")
@@ -232,12 +310,18 @@ async fn google_callback(
             .map_err(AppError::Database)?
     };
 
-    tx.commit().await.map_err(AppError::Database)?;
+    tx.commit().await.map_err(|e| {
+        warn!("DB commit error branch triggered");
+        AppError::Database(e)
+    })?;
 
     auth_session
         .login(&user)
         .await
-        .map_err(|e| AppError::Other(anyhow::anyhow!("Session login failed: {:?}", e)))?;
+        .map_err(|e| {
+            warn!("Session login error branch triggered");
+            AppError::Other(anyhow::anyhow!("Session login failed: {:?}", e))
+        })?;
 
     let (ip, ua) = extract_client_info(&headers, Some(&ConnectInfo(addr)));
     record_event(&state.db, Some(user.id), "oauth_login", ip, ua).await;
