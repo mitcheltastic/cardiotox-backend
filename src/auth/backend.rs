@@ -29,7 +29,9 @@ impl AuthnBackend for Backend {
         &self,
         creds: Self::Credentials,
     ) -> Result<Option<Self::User>, Self::Error> {
-        let user: Option<User> = sqlx::query_as("SELECT * FROM users WHERE email = $1")
+        // Filter out soft-deleted users here so they cannot log in.
+        // This is what makes soft-delete secure.
+        let user: Option<User> = sqlx::query_as("SELECT * FROM users WHERE email = $1 AND deleted_at IS NULL")
             .bind(&creds.email)
             .fetch_optional(&self.db)
             .await?;
@@ -62,7 +64,8 @@ impl AuthnBackend for Backend {
     }
 
     async fn get_user(&self, user_id: &Uuid) -> Result<Option<Self::User>, Self::Error> {
-        let user = sqlx::query_as("SELECT * FROM users WHERE id = $1")
+        // Existing sessions of soft-deleted users stop resolving here -> they're logged out
+        let user = sqlx::query_as("SELECT * FROM users WHERE id = $1 AND deleted_at IS NULL")
             .bind(user_id)
             .fetch_optional(&self.db)
             .await?;

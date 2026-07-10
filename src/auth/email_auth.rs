@@ -13,6 +13,7 @@ use validator::Validate;
 
 use crate::{
     auth::{
+        action_codes::{create_action_code, verify_action_code},
         backend::{AuthSession, Credentials},
         password::hash_password,
         tokens::{consume_token, create_token},
@@ -175,7 +176,7 @@ async fn forgot_password(
     State(state): State<AppState>,
     Json(payload): Json<ForgotPayload>,
 ) -> Result<impl IntoResponse, AppError> {
-    let user: Option<User> = sqlx::query_as("SELECT * FROM users WHERE email = $1")
+    let user: Option<User> = sqlx::query_as("SELECT * FROM users WHERE email = $1 AND deleted_at IS NULL")
         .bind(&payload.email)
         .fetch_optional(&state.db)
         .await?;
@@ -237,6 +238,63 @@ async fn reset_password(
     }
 }
 
+async fn request_account_delete(
+    auth_session: AuthSession,
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, AppError> {
+    let user = auth_session.user.ok_or(AppError::Unauthorized)?;
+    
+    let code = create_action_code(
+        &state.db,
+        user.id,
+        "delete_account",
+        Duration::minutes(10),
+    ).await?;
+    
+    if let Err(e) = state.mailer.send_action_code(&user.email, &code, "Account Deletion").await {
+        error!("Failed to send action code to {}: {:?}", user.email, e);
+    }
+    
+    Ok(StatusCode::OK)
+}
+
+#[derive(Deserialize)]
+pub struct DeleteConfirmPayload {
+    pub code: String,
+}
+
+async fn confirm_account_delete(
+    mut auth_session: AuthSession,
+    headers: HeaderMap,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    State(state): State<AppState>,
+    Json(payload): Json<DeleteConfirmPayload>,
+) -> Result<impl IntoResponse, AppError> {
+    let user = auth_session.user.clone().ok_or(AppError::Unauthorized)?;
+    
+    verify_action_code(
+        &state.db,
+        user.id,
+        "delete_account",
+        &payload.code,
+    ).await?;
+    
+    // Soft delete the user
+    sqlx::query("UPDATE users SET deleted_at = now() WHERE id = $1")
+        .bind(user.id)
+        .execute(&state.db)
+        .await?;
+        
+    // Destroy the current session.
+    // Note: because of Phase 6 guard, once deleted_at is set the user is immediately locked out everywhere else.
+    auth_session.logout().await.map_err(|e| AppError::Other(anyhow::anyhow!(e)))?;
+    
+    let (ip, ua) = extract_client_info(&headers, Some(&ConnectInfo(addr)));
+    record_event(&state.db, Some(user.id), "account_deleted", ip, ua).await;
+    
+    Ok(StatusCode::OK)
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/register", post(register))
@@ -246,4 +304,6 @@ pub fn router() -> Router<AppState> {
         .route("/verify", get(verify))
         .route("/password/forgot", post(forgot_password))
         .route("/password/reset", post(reset_password))
+        .route("/account/delete/request", post(request_account_delete))
+        .route("/account/delete/confirm", post(confirm_account_delete))
 }

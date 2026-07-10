@@ -9,6 +9,7 @@ mod models;
 mod services;
 mod state;
 mod telemetry;
+mod admin;
 
 use axum::{response::IntoResponse, routing::get, Router};
 use axum_login::AuthManagerLayerBuilder;
@@ -141,6 +142,7 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .nest("/api", api_router)
         .nest("/auth", auth::email_auth::router().merge(auth::google_oauth::router()))
+        .nest("/admin", admin::router())
         .route("/healthz", get(healthz))
         .layer(middleware)
         .with_state(state);

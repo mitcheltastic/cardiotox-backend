@@ -13,6 +13,8 @@ pub struct User {
     pub display_name: Option<String>,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
+    pub role: String,
+    pub deleted_at: Option<OffsetDateTime>,
 }
 
 impl std::fmt::Debug for User {
@@ -25,6 +27,8 @@ impl std::fmt::Debug for User {
             .field("display_name", &self.display_name)
             .field("created_at", &self.created_at)
             .field("updated_at", &self.updated_at)
+            .field("role", &self.role)
+            .field("deleted_at", &self.deleted_at)
             .finish()
     }
 }
@@ -47,6 +51,7 @@ pub struct UserProfile {
     pub email: String,
     pub email_verified: bool,
     pub display_name: Option<String>,
+    pub role: String,
 }
 
 impl From<User> for UserProfile {
@@ -56,6 +61,7 @@ impl From<User> for UserProfile {
             email: user.email,
             email_verified: user.email_verified,
             display_name: user.display_name,
+            role: user.role,
         }
     }
 }
