@@ -1,4 +1,3 @@
-use rand::Rng;
 use rand::RngExt;
 use sha2::{Sha256, Digest};
 use sqlx::PgPool;

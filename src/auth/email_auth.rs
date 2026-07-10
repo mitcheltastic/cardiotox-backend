@@ -44,7 +44,7 @@ async fn register(
 
     let hash = hash_password(payload.password).await.map_err(AppError::Other)?;
 
-    let user: User = sqlx::query_as(
+    let user: User = match sqlx::query_as(
         r#"
         INSERT INTO users (email, password_hash, display_name)
         VALUES ($1, $2, $3)
@@ -55,7 +55,13 @@ async fn register(
     .bind(&hash)
     .bind(&payload.display_name)
     .fetch_one(&state.db)
-    .await?;
+    .await {
+        Ok(user) => user,
+        Err(sqlx::Error::Database(err)) if err.is_unique_violation() => {
+            return Err(AppError::Conflict);
+        }
+        Err(e) => return Err(AppError::Other(anyhow::anyhow!(e))),
+    };
 
     let (ip, ua) = extract_client_info(&headers, Some(&ConnectInfo(addr)));
     record_event(&state.db, Some(user.id), "register", ip, ua).await;

@@ -43,7 +43,7 @@ async fn google_auth(
                 .map_err(|e| AppError::Other(anyhow::anyhow!(e)))?,
         )
         .set_redirect_uri(
-            RedirectUrl::new(format!("{}/api/auth/google/callback", state.config.frontend_url))
+            RedirectUrl::new(state.config.google_redirect_url.clone())
                 .map_err(|e| AppError::Other(anyhow::anyhow!(e)))?,
         );
 
@@ -125,7 +125,7 @@ async fn google_callback(
                 .map_err(|e| AppError::Other(anyhow::anyhow!(e)))?,
         )
         .set_redirect_uri(
-            RedirectUrl::new(format!("{}/api/auth/google/callback", state.config.frontend_url))
+            RedirectUrl::new(state.config.google_redirect_url.clone())
                 .map_err(|e| AppError::Other(anyhow::anyhow!(e)))?,
         );
 

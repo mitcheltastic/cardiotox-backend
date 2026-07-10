@@ -13,6 +13,7 @@ pub enum AppError {
     Database(#[from] sqlx::Error),
     
     #[error("Service unavailable")]
+    #[allow(dead_code)] // Reserved for future API rate limiting or dependency failures
     Unavailable,
     
     #[error("Conflict")]
