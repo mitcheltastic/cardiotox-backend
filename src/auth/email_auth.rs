@@ -295,6 +295,82 @@ async fn confirm_account_delete(
     Ok(StatusCode::OK)
 }
 
+async fn request_password_change(
+    auth_session: AuthSession,
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, AppError> {
+    let user = auth_session.user.ok_or(AppError::Unauthorized)?;
+    
+    if user.password_hash.is_none() {
+        return Err(AppError::BadRequest("no password set for this account; you sign in with Google.".to_string()));
+    }
+    
+    let code = create_action_code(
+        &state.db,
+        user.id,
+        "change_password",
+        Duration::minutes(10),
+    ).await?;
+    
+    if let Err(e) = state.mailer.send_action_code(&user.email, &code, "Password Change").await {
+        error!("Failed to send action code to {}: {:?}", user.email, e);
+    }
+    
+    Ok(StatusCode::OK)
+}
+
+#[derive(Deserialize, Validate)]
+pub struct PasswordChangeConfirmPayload {
+    pub current_password: String,
+    #[validate(length(min = 8, message = "Password must be at least 8 characters long"))]
+    pub new_password: String,
+    pub code: String,
+}
+
+async fn confirm_password_change(
+    mut auth_session: AuthSession,
+    headers: HeaderMap,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    State(state): State<AppState>,
+    Json(payload): Json<PasswordChangeConfirmPayload>,
+) -> Result<impl IntoResponse, AppError> {
+    payload.validate().map_err(|e| AppError::Validation(e.to_string()))?;
+
+    let user = auth_session.user.clone().ok_or(AppError::Unauthorized)?;
+
+    let hash = user.password_hash.as_deref().ok_or_else(|| AppError::Unauthorized)?;
+    let is_valid_password = crate::auth::password::verify_password(payload.current_password, hash.to_string()).await;
+
+    let is_valid_code = verify_action_code(&state.db, user.id, "change_password", &payload.code).await.is_ok();
+
+    if !is_valid_password || !is_valid_code {
+        return Err(AppError::Unauthorized); // Generic error to hide which factor failed
+    }
+
+    let new_hash = hash_password(payload.new_password)
+        .await
+        .map_err(AppError::Other)?;
+
+    let updated_user: User = sqlx::query_as(
+        "UPDATE users SET password_hash = $1 WHERE id = $2 RETURNING *"
+    )
+    .bind(&new_hash)
+    .bind(user.id)
+    .fetch_one(&state.db)
+    .await?;
+
+    // Log in with the updated user to update the auth hash in the current session.
+    // Because the auth hash (password hash) changed, all OTHER existing sessions for this user
+    // will be automatically invalidated by axum-login when they try to authenticate.
+    // By re-logging in here, we keep THIS current session valid so the user isn't logged out.
+    auth_session.login(&updated_user).await.map_err(|e| AppError::Other(anyhow::anyhow!(e)))?;
+
+    let (ip, ua) = extract_client_info(&headers, Some(&ConnectInfo(addr)));
+    record_event(&state.db, Some(user.id), "password_changed", ip, ua).await;
+
+    Ok(StatusCode::OK)
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/register", post(register))
@@ -304,6 +380,8 @@ pub fn router() -> Router<AppState> {
         .route("/verify", get(verify))
         .route("/password/forgot", post(forgot_password))
         .route("/password/reset", post(reset_password))
+        .route("/password/change/request", post(request_password_change))
+        .route("/password/change/confirm", post(confirm_password_change))
         .route("/account/delete/request", post(request_account_delete))
         .route("/account/delete/confirm", post(confirm_account_delete))
 }
