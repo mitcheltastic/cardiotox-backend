@@ -29,6 +29,7 @@ Welcome to the frontend API reference! This backend powers the Cardivex TdP card
    - [Google OAuth](#google-oauth)
    - [Account Management](#account-management)
    - [AI Prediction](#ai-prediction)
+   - [User History (your own data)](#user-history-your-own-data)
    - [Admin Endpoints](#admin-endpoints)
    - [Health](#health)
 4. [Error Handling](#error-handling)
@@ -281,6 +282,81 @@ Generates SHAP values to explain a prediction.
 
 ---
 
+### User History (your own data)
+
+These endpoints provide the logged-in user's personal prediction and explanation history. 
+> [!NOTE]
+> Unlike the `/admin/*` endpoints that return all users' data and require the `admin` role, these endpoints return **only your own rows**. The user ID is securely pulled from the active session, not from the client, so a user can never fetch someone else's data. Any logged-in user can access these endpoints.
+
+List endpoints are paginated, defaulting to `?limit=50&offset=0` (max limit 200). They return the standard envelope: `{ "items": [...], "limit": 50, "offset": 0, "total": 125 }`. Newest items are returned first (sorted by `created_at DESC`).
+
+#### GET `/api/history/predictions`
+Returns the current user's prediction history.
+- **Access**: Protected
+- **Success (200 OK)**:
+  ```json
+  {
+    "items": [
+      {
+        "id": "123e4567-e89b-12d3-a456-426614174000",
+        "input": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1],
+        "predicted_tier": "High",
+        "probabilities": {"High": 0.85, "Intermediate": 0.10, "Low": 0.05},
+        "latency_ms": 450,
+        "created_at": "2026-07-10T12:05:00Z"
+      }
+    ],
+    "limit": 50,
+    "offset": 0,
+    "total": 1
+  }
+  ```
+
+#### GET `/api/history/explanations`
+Returns the current user's SHAP explanation history.
+- **Access**: Protected
+- **Success (200 OK)**:
+  ```json
+  {
+    "items": [
+      {
+        "id": "123e4567-e89b-12d3-a456-426614174001",
+        "prediction_id": null,
+        "input": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1],
+        "predicted_class": "High",
+        "base_value": 0.45,
+        "contributions": [
+          {"feature": "qNet", "value": 0.12},
+          {"feature": "dvdtmax", "value": -0.05}
+        ],
+        "latency_ms": 1200,
+        "created_at": "2026-07-10T12:05:30Z"
+      }
+    ],
+    "limit": 50,
+    "offset": 0,
+    "total": 1
+  }
+  ```
+
+#### GET `/api/history/summary`
+Returns lightweight dashboard statistics for the current user.
+- **Access**: Protected
+- **Success (200 OK)**:
+  ```json
+  {
+    "total_predictions": 42,
+    "total_explanations": 15,
+    "tier_counts": {
+      "High": 10,
+      "Intermediate": 12,
+      "Low": 20
+    }
+  }
+  ```
+
+---
+
 ### Admin Endpoints
 
 All admin endpoints require the `admin` role and return `403 Forbidden` for normal users.
@@ -330,7 +406,7 @@ Lists global SHAP explain histories.
 #### GET `/healthz`
 Checks if the API is awake.
 - **Access**: Public
-- **Success (200 OK)**: `{"status":"ok"}`
+- **Success (200 OK)**: `"OK"` (Plain text string, not JSON)
 
 ---
 
@@ -378,9 +454,12 @@ Based on this API, your frontend application should implement:
    - `/reset-password`: Form to submit new password (reads `?token=` from URL).
 2. **Main Application**:
    - Dashboard to input the 11 biomarkers and display the tier prediction and SHAP explanation charts.
-3. **Account Settings**:
+3. **User Dashboard / History (Protected)**:
+   - A page that consumes the history endpoints to show a user's own prediction and SHAP history.
+   - Display the summary stats (total predictions, total explanations, tier breakdown) as headline cards.
+4. **Account Settings**:
    - Change Password (requires current password + email code UI).
    - Delete Account (requires email code UI + terrifying warning).
-4. **Admin Dashboard (Protected)**:
+5. **Admin Dashboard (Protected)**:
    - User Management Table (list, delete, restore).
    - Global Activity Feeds (auth events, prediction logs, and shap logs).
