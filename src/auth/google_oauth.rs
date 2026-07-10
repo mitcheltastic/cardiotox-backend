@@ -69,7 +69,16 @@ async fn google_auth(
         .await
         .map_err(|e| AppError::Other(anyhow::anyhow!(e)))?;
 
-    Ok(Redirect::to(auth_url.as_str()).into_response())
+    let mut response = Redirect::to(auth_url.as_str()).into_response();
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store, no-cache, must-revalidate"),
+    );
+    response.headers_mut().insert(
+        axum::http::header::PRAGMA,
+        axum::http::HeaderValue::from_static("no-cache"),
+    );
+    Ok(response)
 }
 
 #[derive(Deserialize)]
@@ -228,7 +237,16 @@ async fn google_callback(
     record_event(&state.db, Some(user.id), "oauth_login", ip, ua).await;
 
     let frontend_success_url = format!("{}/login?login=success", state.config.frontend_url);
-    Ok(Redirect::to(&frontend_success_url).into_response())
+    let mut response = Redirect::to(&frontend_success_url).into_response();
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store, no-cache, must-revalidate"),
+    );
+    response.headers_mut().insert(
+        axum::http::header::PRAGMA,
+        axum::http::HeaderValue::from_static("no-cache"),
+    );
+    Ok(response)
 }
 
 pub fn router() -> Router<AppState> {
