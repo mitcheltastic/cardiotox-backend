@@ -70,12 +70,6 @@ async fn google_auth(
         .await
         .map_err(|e| AppError::Other(anyhow::anyhow!(e)))?;
 
-    auth_session
-        .session
-        .flush()
-        .await
-        .map_err(|e| AppError::Other(anyhow::anyhow!("Failed to save session state: {}", e)))?;
-
     if let Some(session_id) = auth_session.session.id() {
         info!("GET /auth/google (start): Session ID = {}", session_id);
     } else {
