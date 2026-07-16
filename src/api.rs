@@ -81,14 +81,41 @@ async fn predict(
         tracing::debug!("Probabilities were null. Raw Gradio data array: {:?}", result);
     }
 
+    let conformal_obj = result.as_array().and_then(|arr| arr.get(2));
+
+    let prediction_set = conformal_obj.and_then(|obj| obj.get("prediction_set")).cloned();
+    let recommended_action = conformal_obj
+        .and_then(|obj| obj.get("recommended_action"))
+        .and_then(|v| v.as_str())
+        .map(normalize_tier);
+    let is_ambiguous = conformal_obj
+        .and_then(|obj| obj.get("is_ambiguous"))
+        .and_then(|v| v.as_bool());
+    let out_of_distribution = conformal_obj
+        .and_then(|obj| obj.get("out_of_distribution"))
+        .and_then(|v| v.as_bool());
+    let alpha = conformal_obj
+        .and_then(|obj| obj.get("alpha"))
+        .and_then(|v| v.as_f64());
+    let q_hat = conformal_obj
+        .and_then(|obj| obj.get("q_hat"))
+        .and_then(|v| v.as_f64());
+
+    if conformal_obj.is_none() {
+        tracing::debug!("Conformal fields were missing or malformed. Raw Gradio data array: {:?}", result);
+    }
+
     let input_json = serde_json::to_value(&payload.data).unwrap();
 
     let db = state.db.clone();
     tokio::spawn(async move {
         let res = sqlx::query(
             r#"
-            INSERT INTO prediction_logs (user_id, input, predicted_tier, probabilities, latency_ms)
-            VALUES ($1, $2, $3, $4, $5)
+            INSERT INTO prediction_logs (
+                user_id, input, predicted_tier, probabilities, latency_ms,
+                prediction_set, recommended_action, is_ambiguous, out_of_distribution, alpha, q_hat
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             "#,
         )
         .bind(user.id)
@@ -96,6 +123,12 @@ async fn predict(
         .bind(&predicted_tier)
         .bind(&probabilities)
         .bind(elapsed)
+        .bind(&prediction_set)
+        .bind(&recommended_action)
+        .bind(is_ambiguous)
+        .bind(out_of_distribution)
+        .bind(alpha)
+        .bind(q_hat)
         .execute(&db)
         .await;
 
