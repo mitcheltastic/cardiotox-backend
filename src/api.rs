@@ -218,6 +218,12 @@ pub struct HistoryPredictionRow {
     pub predicted_tier: Option<String>,
     pub probabilities: Option<serde_json::Value>,
     pub latency_ms: Option<i32>,
+    pub prediction_set: Option<serde_json::Value>,
+    pub recommended_action: Option<String>,
+    pub is_ambiguous: Option<bool>,
+    pub out_of_distribution: Option<bool>,
+    pub alpha: Option<f64>,
+    pub q_hat: Option<f64>,
     #[serde(with = "time::serde::iso8601")]
     pub created_at: OffsetDateTime,
 }
@@ -232,7 +238,7 @@ async fn my_predictions(
     let offset = filter.pagination.offset();
 
     let items = sqlx::query_as::<_, HistoryPredictionRow>(
-        "SELECT id, input, predicted_tier, probabilities, latency_ms, created_at FROM prediction_logs WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3"
+        "SELECT id, input, predicted_tier, probabilities, latency_ms, prediction_set, recommended_action, is_ambiguous, out_of_distribution, alpha, q_hat, created_at FROM prediction_logs WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3"
     )
     .bind(user.id)
     .bind(limit)
