@@ -99,6 +99,9 @@ When a user successfully logs in, or when you check `GET /auth/me`, the response
 
 ### Email Auth
 
+> [!NOTE]
+> **Authentication Rate Limiting**: All `/auth/*` endpoints (registration, login, logout, verification, password recovery, account deletion) are protected by a strict rate limit of **1 request per second with a burst capacity of 5 requests** per IP address. Exceeding this limit returns `429 Too Many Requests`. The OAuth flow and email verification links work within this burst allowance.
+
 #### POST `/auth/register`
 Creates a new account. Sends a verification email.
 - **Access**: Public
@@ -248,20 +251,30 @@ Runs the Cardivex classification model.
 - **Success (200 OK)**:
   ```json
   {
+    "prediction_id": "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
     "data": [
       { "label": "Safe" },
       "Tier 1" 
-    ],
-    "duration": 0.45
+    ]
   }
   ```
   > **Note**: Always read the classification tier from `data[0].label`. Ignore the raw string in `data[1]` as it is inconsistently formatted by Gradio. The two-step Gradio flow is hidden by the backend.
-- **Errors**: `429 Too Many Requests` (Rate limit exceeded), `502 Bad Gateway` (Gradio space asleep/down).
+  > **Link Explanations**: The response includes a new top-level `prediction_id` (UUID). Pass this `prediction_id` to `POST /api/explain` to link the generated SHAP explanation directly to this prediction in user history and audit records.
+- **Errors**: `422 Unprocessable Entity` (Feature count != 11, or NaN/infinite value detected), `429 Too Many Requests` (Rate limit exceeded: 2 req/s, burst 10), `502 Bad Gateway` (Gradio space asleep/down).
 
 #### POST `/api/explain`
 Generates SHAP values to explain a prediction.
 - **Access**: Protected
-- **Body**: Same as `/api/predict`.
+- **Body**:
+  ```json
+  {
+    "data": [
+      0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1
+    ],
+    "prediction_id": "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"
+  }
+  ```
+  > **Note**: `prediction_id` is **optional**. When provided, the SHAP explanation will be linked to the prediction in `shap_logs`. Requests without `prediction_id` continue to work exactly as before.
 - **Success (200 OK)**:
   ```json
   {
@@ -274,11 +287,10 @@ Generates SHAP values to explain a prediction.
           {"feature": "dvdtmax", "value": -0.05}
         ]
       }
-    ],
-    "duration": 1.2
+    ]
   }
   ```
-- **Errors**: `429 Too Many Requests` (Rate limit exceeded), `502 Bad Gateway` (Gradio space asleep/down).
+- **Errors**: `422 Unprocessable Entity` (Feature count != 11, or NaN/infinite value detected), `429 Too Many Requests` (Rate limit exceeded: 2 req/s, burst 10), `502 Bad Gateway` (Gradio space asleep/down).
 
 ---
 
@@ -421,8 +433,8 @@ The backend returns standardized HTTP status codes. The response body usually co
 | **403** `Forbidden` | Email not verified, or missing `admin` role. | Show a "permission denied" or "please verify email" message. |
 | **404** `Not Found` | Resource (e.g., user ID) doesn't exist. | Show a 404 UI. |
 | **409** `Conflict` | Email already in use during registration. | Ask the user to log in instead. |
-| **422** `Unprocessable`| Malformed JSON sent in request body. | Check your API payload format. |
-| **429** `Too Many Req`| Hit the rate limit for AI prediction endpoints. | Show "Please wait a moment before trying again." |
+| **422** `Unprocessable`| Bad input: not 11 numbers, NaN/infinite values, or value outside the accepted ratio-to-control range. | Check inputs; ensure ratios to control (not physical units) are provided. |
+| **429** `Too Many Req`| Hit rate limit: auth routes enforce 1 req/s (burst 5); AI prediction routes enforce 2 req/s (burst 10). | Show "Please wait a moment before trying again." |
 | **502** `Bad Gateway` | Gradio ML server is sleeping or down. | Show a loading state, silently retry after a few seconds. |
 | **500** `Server Error`| Unexpected backend crash. | Show a generic "Something went wrong" message. |
 

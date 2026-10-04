@@ -377,12 +377,16 @@ async fn confirm_password_change(
     Ok(StatusCode::OK)
 }
 
-pub fn router() -> Router<AppState> {
+pub fn unthrottled_router() -> Router<AppState> {
+    Router::new()
+        .route("/me", get(me))
+        .route("/logout", post(logout))
+}
+
+pub fn rate_limited_router() -> Router<AppState> {
     Router::new()
         .route("/register", post(register))
         .route("/login", post(login))
-        .route("/logout", post(logout))
-        .route("/me", get(me))
         .route("/verify", get(verify))
         .route("/password/forgot", post(forgot_password))
         .route("/password/reset", post(reset_password))
@@ -391,3 +395,4 @@ pub fn router() -> Router<AppState> {
         .route("/account/delete/request", post(request_account_delete))
         .route("/account/delete/confirm", post(confirm_account_delete))
 }
+

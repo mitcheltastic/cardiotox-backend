@@ -21,3 +21,8 @@ client_secret*.json
 # OS specific files
 .DS_Store
 Thumbs.db
+
+# Documentation and temporary notes
+CD4_report_backend.md
+CHANGES_CD4.md
+
