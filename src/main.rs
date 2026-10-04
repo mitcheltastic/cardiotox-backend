@@ -21,7 +21,7 @@ use tower_http::{
 };
 use axum_login::tower_sessions::{SessionManagerLayer, cookie::SameSite, Expiry};
 use tower_sessions_sqlx_store::PostgresStore;
-use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
+use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer, key_extractor::SmartIpKeyExtractor};
 
 use crate::{
     auth::backend::Backend,
@@ -100,7 +100,11 @@ async fn main() -> anyhow::Result<()> {
     let cors_layer = CorsLayer::new()
         .allow_origin(tower_http::cors::AllowOrigin::list(origins))
         .allow_credentials(true)
-        .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
+        .allow_methods([
+            axum::http::Method::GET,
+            axum::http::Method::POST,
+            axum::http::Method::DELETE,
+        ])
         .allow_headers([axum::http::header::CONTENT_TYPE]);
 
     let trace_layer = TraceLayer::new_for_http()
@@ -127,21 +131,37 @@ async fn main() -> anyhow::Result<()> {
         .layer(auth_layer);
 
     // 6.5 Rate Limiter
-    let governor_conf = Arc::new(
+    let api_governor_conf = Arc::new(
         GovernorConfigBuilder::default()
-            .per_second(2)
+            .per_millisecond(500)
             .burst_size(10)
+            .key_extractor(SmartIpKeyExtractor)
             .finish()
             .unwrap(),
     );
-    let rate_limit_layer = GovernorLayer::new(governor_conf);
+    let api_rate_limit_layer = GovernorLayer::new(api_governor_conf);
 
-    let api_router = api::router().layer(rate_limit_layer);
+    let auth_governor_conf = Arc::new(
+        GovernorConfigBuilder::default()
+            .per_second(1)
+            .burst_size(5)
+            .key_extractor(SmartIpKeyExtractor)
+            .finish()
+            .unwrap(),
+    );
+    let auth_rate_limit_layer = GovernorLayer::new(auth_governor_conf);
+
+    let api_router = api::router().layer(api_rate_limit_layer);
+    let auth_router = auth::email_auth::unthrottled_router().merge(
+        auth::email_auth::rate_limited_router()
+            .merge(auth::google_oauth::router())
+            .layer(auth_rate_limit_layer),
+    );
 
     // 7. Build router
     let app = Router::new()
         .nest("/api", api_router)
-        .nest("/auth", auth::email_auth::router().merge(auth::google_oauth::router()))
+        .nest("/auth", auth_router)
         .nest("/admin", admin::router())
         .route("/healthz", get(healthz))
         .layer(middleware)

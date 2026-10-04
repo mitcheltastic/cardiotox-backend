@@ -224,31 +224,35 @@ scales server-side):
 [ qNet, dvdtmax, vmax, vrest, APD50, APD90, max_dv, camax, carest, CaTD50, CaTD90 ]
 ```
 
+> ⚠️ Input sanity checks: Any request where `data.length !== 11` or any value is `NaN` or infinite (`±Infinity`) is rejected immediately with `422 Unprocessable Entity`.
+
 ### `POST /api/predict` — risk tier (instant)
 
 ```js
-const result = await api("/api/predict", {
+const res = await api("/api/predict", {
   method: "POST",
   body: { data: [0.07, 12.3, 40.1, -88.0, 210.0, 330.0, 8.2, 0.0004, 0.0001, 190.0, 260.0] },
 });
-// result is the Gradio "data" array:
-//   result[0] = { label: "High", confidences: [ {label:"high",confidence:0.64}, ... ] }
-//   result[1] = a human-readable tier string
+// res contains:
+//   res.prediction_id = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11" (UUID for this prediction)
+//   res.data = Gradio output array:
+//     res.data[0] = { label: "High", confidences: [ {label:"high",confidence:0.64}, ... ] }
+//     res.data[1] = a human-readable tier string
 ```
 
-**How to read the tier (do this robustly):** prefer `result[0]` — it's the clean, structured
+**How to read the tier (do this robustly):** prefer `res.data[0]` — it's the clean, structured
 source.
 
 ```js
-const label = result[0];                       // { label, confidences: [...] }
+const label = res.data[0];                       // { label, confidences: [...] }
 const tier  = label.label;                      // "High" | "Intermediate" | "Low"
 const confidences = label.confidences;          // [{label, confidence}, ...]
 ```
 
-> ⚠️ `result[1]` is a display string and **may** come back with a prefix like
+> ⚠️ `res.data[1]` is a display string and **may** come back with a prefix like
 > `"Predicted Risk Tier: High"` depending on the model output. Don't rely on it for logic —
-> use `result[0].label` (or the highest-confidence entry in `result[0].confidences`) to
-> determine the tier. Treat `result[1]` as optional display text only.
+> use `res.data[0].label` (or the highest-confidence entry in `res.data[0].confidences`) to
+> determine the tier. Treat `res.data[1]` as optional display text only.
 
 > Note: this is a tree ensemble, so confidences often come back as hard `1.0 / 0.0`. Show it
 > as a **tier**, not as a calibrated clinical probability.
@@ -258,9 +262,17 @@ const confidences = label.confidences;          // [{label, confidence}, ...]
 Same 11-value input. Call this only when the user asks (e.g. an "Explain" button) — it takes
 a few seconds, and the first call after the backend/Space wakes is the slowest.
 
+You can optionally pass the `prediction_id` obtained from `POST /api/predict` to link this explanation directly to that prediction in the user's history and database audit logs:
+
 ```js
-const exp = await api("/api/explain", { method: "POST", body: { data: [...11 numbers...] } });
-const shap = exp[0];
+const exp = await api("/api/explain", {
+  method: "POST",
+  body: {
+    data: [...11 numbers...],
+    prediction_id: res.prediction_id, // OPTIONAL: links this explanation to the prediction
+  },
+});
+const shap = exp.data[0];
 // shap = {
 //   predicted_class: "high",
 //   base_value: 0.3347,
@@ -288,8 +300,8 @@ The `api()` helper throws `{ status, data }`. Branch on `status`:
 | `401` | Not logged in / session expired | Redirect to `/login`. |
 | `403` | Email not verified (on login) | "Please verify your email first." Offer to resend later. |
 | `409` | Email already registered | "That email is already in use." → link to login. |
-| `422` | Bad input (e.g. not 11 numbers) | "Check your inputs." |
-| `429` | Rate limited (too many AI calls) | "Slow down a moment and try again." |
+| `422` | Bad input (e.g. not 11 numbers, or NaN/infinite value) | "Check your inputs." |
+| `429` | Rate limited (auth: 1 req/s, burst 5; AI: 2 req/s, burst 10) | "Slow down a moment and try again." |
 | `502` | Prediction service error (HF down/cold) | "The model is waking up, please retry." + retry. |
 
 Example:
