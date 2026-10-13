@@ -1,7 +1,7 @@
 use axum::{
     extract::{ConnectInfo, Query, State},
     http::HeaderMap,
-    response::{IntoResponse, Redirect},
+    response::{IntoResponse, Redirect, Response},
     routing::get,
     Router,
 };
@@ -27,6 +27,19 @@ fn build_http_client() -> Result<reqwest::Client, AppError> {
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| AppError::Other(anyhow::anyhow!(e)))
+}
+
+fn redirect_to_frontend(url: &str) -> Response {
+    let mut response = Redirect::to(url).into_response();
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store, no-cache, must-revalidate"),
+    );
+    response.headers_mut().insert(
+        axum::http::header::PRAGMA,
+        axum::http::HeaderValue::from_static("no-cache"),
+    );
+    response
 }
 
 async fn google_auth(
@@ -111,6 +124,10 @@ async fn google_callback(
 ) -> Result<impl IntoResponse, AppError> {
     info!("GET /auth/google/callback HIT. state len: {}, code len: {}", query.state.len(), query.code.len());
 
+    let frontend_base = state.config.frontend_url.trim_end_matches('/');
+    let error_redirect_url = format!("{}/login?error=invalid", frontend_base);
+    let success_redirect_url = format!("{}/login?login=success", frontend_base);
+
     if let Some(session_id) = auth_session.session.id() {
         info!("Callback Session ID = {}", session_id);
     } else {
@@ -135,7 +152,9 @@ async fn google_callback(
         Err(e) => {
             error!("Failed to get csrf_state from session: {}", e);
             warn!("Session state read error branch triggered");
-            return Err(AppError::Other(anyhow::anyhow!(e)));
+            auth_session.session.remove::<serde_json::Value>("csrf_state").await.ok();
+            auth_session.session.remove::<serde_json::Value>("pkce_verifier").await.ok();
+            return Ok(redirect_to_frontend(&error_redirect_url));
         }
     };
 
@@ -147,7 +166,9 @@ async fn google_callback(
         Err(e) => {
             error!("Failed to get pkce_verifier from session: {}", e);
             warn!("Session pkce read error branch triggered");
-            return Err(AppError::Other(anyhow::anyhow!(e)));
+            auth_session.session.remove::<serde_json::Value>("csrf_state").await.ok();
+            auth_session.session.remove::<serde_json::Value>("pkce_verifier").await.ok();
+            return Ok(redirect_to_frontend(&error_redirect_url));
         }
     };
 
@@ -156,14 +177,17 @@ async fn google_callback(
 
     if !state_matches {
         warn!("State mismatch error branch triggered");
-        return Err(AppError::Unauthorized);
+        auth_session.session.remove::<serde_json::Value>("csrf_state").await.ok();
+        auth_session.session.remove::<serde_json::Value>("pkce_verifier").await.ok();
+        return Ok(redirect_to_frontend(&error_redirect_url));
     }
 
     let pkce_secret = match stored_pkce {
         Some(s) => s,
         None => {
             warn!("PKCE verifier missing error branch triggered");
-            return Err(AppError::Unauthorized);
+            auth_session.session.remove::<serde_json::Value>("csrf_state").await.ok();
+            return Ok(redirect_to_frontend(&error_redirect_url));
         }
     };
 
@@ -182,20 +206,33 @@ async fn google_callback(
                 .map_err(|e| AppError::Other(anyhow::anyhow!(e)))?,
         );
 
-    let http = build_http_client()?;
+    let http = match build_http_client() {
+        Ok(client) => client,
+        Err(e) => {
+            error!("Failed to build HTTP client: {:?}", e);
+            auth_session.session.remove::<serde_json::Value>("csrf_state").await.ok();
+            auth_session.session.remove::<serde_json::Value>("pkce_verifier").await.ok();
+            return Ok(redirect_to_frontend(&error_redirect_url));
+        }
+    };
 
-    let token_res = client
+    let token_res = match client
         .exchange_code(AuthorizationCode::new(query.code))
         .set_pkce_verifier(PkceCodeVerifier::new(pkce_secret))
         .request_async(&http)
         .await
-        .map_err(|e| {
+    {
+        Ok(tokens) => tokens,
+        Err(e) => {
             error!("Token exchange failed with error: {:?}", e);
             warn!("Token exchange error branch triggered");
-            AppError::Other(anyhow::anyhow!("Token exchange failed: {}", e))
-        })?;
+            auth_session.session.remove::<serde_json::Value>("csrf_state").await.ok();
+            auth_session.session.remove::<serde_json::Value>("pkce_verifier").await.ok();
+            return Ok(redirect_to_frontend(&error_redirect_url));
+        }
+    };
 
-    let user_info_res = http
+    let user_info_res = match http
         .get("https://openidconnect.googleapis.com/v1/userinfo")
         .header(
             "Authorization",
@@ -203,11 +240,16 @@ async fn google_callback(
         )
         .send()
         .await
-        .map_err(|e| {
+    {
+        Ok(resp) => resp,
+        Err(e) => {
             error!("Userinfo request failed with error: {:?}", e);
             warn!("Userinfo fetch error branch triggered");
-            AppError::Other(anyhow::anyhow!("Userinfo request failed: {}", e))
-        })?;
+            auth_session.session.remove::<serde_json::Value>("csrf_state").await.ok();
+            auth_session.session.remove::<serde_json::Value>("pkce_verifier").await.ok();
+            return Ok(redirect_to_frontend(&error_redirect_url));
+        }
+    };
 
     let status = user_info_res.status();
     info!("Userinfo fetch HTTP status: {}", status);
@@ -216,23 +258,29 @@ async fn google_callback(
         let body = user_info_res.text().await.unwrap_or_else(|_| "Failed to read body".to_string());
         error!("Userinfo request failed. Response body: {}", body);
         warn!("Userinfo fetch non-success error branch triggered");
-        return Err(AppError::Other(anyhow::anyhow!("Userinfo request returned non-success: {}", body)));
+        auth_session.session.remove::<serde_json::Value>("csrf_state").await.ok();
+        auth_session.session.remove::<serde_json::Value>("pkce_verifier").await.ok();
+        return Ok(redirect_to_frontend(&error_redirect_url));
     }
 
-    let user_info: GoogleUserInfo = user_info_res
-        .json()
-        .await
-        .map_err(|e| {
+    let user_info: GoogleUserInfo = match user_info_res.json().await {
+        Ok(info) => info,
+        Err(e) => {
             error!("Userinfo parse failed with error: {:?}", e);
             warn!("Userinfo parse error branch triggered");
-            AppError::Other(anyhow::anyhow!("Userinfo parse failed: {}", e))
-        })?;
+            auth_session.session.remove::<serde_json::Value>("csrf_state").await.ok();
+            auth_session.session.remove::<serde_json::Value>("pkce_verifier").await.ok();
+            return Ok(redirect_to_frontend(&error_redirect_url));
+        }
+    };
 
     info!("Email verified: {}", user_info.email_verified);
 
     if !user_info.email_verified {
         warn!("Email not verified error branch triggered");
-        return Err(AppError::BadRequest("Google email not verified".into()));
+        auth_session.session.remove::<serde_json::Value>("csrf_state").await.ok();
+        auth_session.session.remove::<serde_json::Value>("pkce_verifier").await.ok();
+        return Ok(redirect_to_frontend(&error_redirect_url));
     }
 
     let mut tx = state.db.begin().await.map_err(|e| {
@@ -301,6 +349,20 @@ async fn google_callback(
             .map_err(AppError::Database)?
     };
 
+    // Check if account is deactivated / soft-deleted
+    if user.deleted_at.is_some() {
+        warn!("Deactivated user {} ({}) attempted Google OAuth login", user.id, user.email);
+        tx.rollback().await.ok();
+
+        auth_session.session.remove::<serde_json::Value>("csrf_state").await.ok();
+        auth_session.session.remove::<serde_json::Value>("pkce_verifier").await.ok();
+
+        let (ip, ua) = extract_client_info(&headers, Some(&ConnectInfo(addr)));
+        record_event(&state.db, Some(user.id), "oauth_login_deactivated", ip, ua).await;
+
+        return Ok(redirect_to_frontend(&error_redirect_url));
+    }
+
     tx.commit().await.map_err(|e| {
         warn!("DB commit error branch triggered");
         AppError::Database(e)
@@ -320,17 +382,7 @@ async fn google_callback(
     let (ip, ua) = extract_client_info(&headers, Some(&ConnectInfo(addr)));
     record_event(&state.db, Some(user.id), "oauth_login", ip, ua).await;
 
-    let frontend_success_url = format!("{}/login?login=success", state.config.frontend_url);
-    let mut response = Redirect::to(&frontend_success_url).into_response();
-    response.headers_mut().insert(
-        axum::http::header::CACHE_CONTROL,
-        axum::http::HeaderValue::from_static("no-store, no-cache, must-revalidate"),
-    );
-    response.headers_mut().insert(
-        axum::http::header::PRAGMA,
-        axum::http::HeaderValue::from_static("no-cache"),
-    );
-    Ok(response)
+    Ok(redirect_to_frontend(&success_redirect_url))
 }
 
 pub fn router() -> Router<AppState> {
