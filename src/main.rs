@@ -10,6 +10,7 @@ mod services;
 mod state;
 mod telemetry;
 mod admin;
+mod pipeline;
 
 use axum::{response::IntoResponse, routing::get, Router};
 use axum_login::AuthManagerLayerBuilder;
@@ -50,6 +51,9 @@ async fn main() -> anyhow::Result<()> {
 
     // 3. Setup Database
     let db = db::connect_and_migrate(&config.database_url).await?;
+
+    // Reset stale simulation jobs (non-fatal)
+    pipeline::reset_stale_jobs(&db).await;
 
     // 4. Setup Session Store (axum-login requirement)
     let session_store = PostgresStore::new(db.clone());
@@ -151,7 +155,7 @@ async fn main() -> anyhow::Result<()> {
     );
     let auth_rate_limit_layer = GovernorLayer::new(auth_governor_conf);
 
-    let api_router = api::router().layer(api_rate_limit_layer);
+    let api_router = api::router().merge(pipeline::router()).layer(api_rate_limit_layer);
     let auth_router = auth::email_auth::unthrottled_router().merge(
         auth::email_auth::rate_limited_router()
             .merge(auth::google_oauth::router())

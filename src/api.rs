@@ -39,7 +39,7 @@ pub fn router() -> Router<AppState> {
         .route("/history/summary", get(my_summary))
 }
 
-fn normalize_tier(raw: &str) -> String {
+pub(crate) fn normalize_tier(raw: &str) -> String {
     let s = if let Some(idx) = raw.rfind(':') {
         raw[idx + 1..].trim()
     } else {
