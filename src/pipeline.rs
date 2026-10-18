@@ -23,47 +23,47 @@ static DRUGS_CACHE: RwLock<Option<(Instant, Value)>> = RwLock::const_new(None);
 #[allow(non_snake_case)]
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 pub struct HergParams {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub Kmax: Option<f64>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub Ku: Option<f64>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub n: Option<f64>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub halfmax: Option<f64>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub Vhalf: Option<f64>,
 }
 
 #[allow(non_snake_case)]
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 pub struct Ic50Params {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub INa_IC50: Option<f64>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub INa_h: Option<f64>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub INaL_IC50: Option<f64>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub INaL_h: Option<f64>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ICaL_IC50: Option<f64>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ICaL_h: Option<f64>,
 }
 
 #[allow(non_snake_case)]
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 pub struct PipelineJobPayload {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drug: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cmax_nM: Option<f64>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dose: Option<f64>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub herg: Option<HergParams>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ic50: Option<Ic50Params>,
 }
 
@@ -560,6 +560,21 @@ pub fn validate_ratios(ratios_val: &Value) -> Result<Vec<f64>, String> {
     Ok(res)
 }
 
+pub fn clean_null_values(val: &Value) -> Value {
+    match val {
+        Value::Object(map) => {
+            let cleaned: serde_json::Map<String, Value> = map
+                .iter()
+                .filter(|(_, v)| !v.is_null())
+                .map(|(k, v)| (k.clone(), clean_null_values(v)))
+                .collect();
+            Value::Object(cleaned)
+        }
+        Value::Array(arr) => Value::Array(arr.iter().map(clean_null_values).collect()),
+        other => other.clone(),
+    }
+}
+
 fn sanitize_error(msg: &str, sim_key: Option<&str>) -> String {
     let mut clean = msg.to_string();
     if let Some(key) = sim_key
@@ -642,7 +657,8 @@ async fn run_pipeline_job(job_id: Uuid, user_id: Uuid, state: AppState) {
         return;
     }
 
-    let request_json_string = match serde_json::to_string(&request_val) {
+    let clean_req = clean_null_values(&request_val);
+    let request_json_string = match serde_json::to_string(&clean_req) {
         Ok(s) => s,
         Err(e) => {
             mark_job_failed(
@@ -1187,5 +1203,63 @@ mod tests {
         assert!(complete_obj.contains_key("prediction"));
         assert!(complete_obj.contains_key("explanation"));
         assert!(complete_obj.contains_key("sim_latency_ms"));
+    }
+
+    #[test]
+    fn test_serialize_requests_omit_null_fields() {
+        // Mode 1: drug only
+        let mode1 = PipelineJobPayload {
+            drug: Some("vandetanib".to_string()),
+            ..Default::default()
+        };
+        let s1 = serde_json::to_string(&mode1).unwrap();
+        assert_eq!(s1, r#"{"drug":"vandetanib"}"#);
+
+        // Deserializing a client request with explicit nulls must also serialize without nulls
+        let client_json =
+            r#"{"drug":"vandetanib","dose":null,"cmax_nM":null,"herg":null,"ic50":null}"#;
+        let parsed_mode1: PipelineJobPayload = serde_json::from_str(client_json).unwrap();
+        let s1_clean = serde_json::to_string(&parsed_mode1).unwrap();
+        assert_eq!(s1_clean, r#"{"drug":"vandetanib"}"#);
+
+        // Mode 3: herg present, but no dose or cmax
+        let mode3 = PipelineJobPayload {
+            drug: Some("vandetanib".to_string()),
+            herg: Some(HergParams {
+                Kmax: Some(2.0),
+                Ku: Some(0.1),
+                n: Some(1.0),
+                halfmax: Some(40.0),
+                Vhalf: Some(-5.0),
+            }),
+            ..Default::default()
+        };
+        let s3 = serde_json::to_string(&mode3).unwrap();
+        let v3: Value = serde_json::from_str(&s3).unwrap();
+        let obj3 = v3.as_object().unwrap();
+        assert_eq!(
+            obj3.get("drug").and_then(|v| v.as_str()),
+            Some("vandetanib")
+        );
+        assert!(obj3.contains_key("herg"));
+        assert!(!obj3.contains_key("dose"));
+        assert!(!obj3.contains_key("cmax_nM"));
+        assert!(!obj3.contains_key("ic50"));
+
+        // Verify clean_null_values recursive helper
+        let raw_with_nulls = json!({
+            "drug": "vandetanib",
+            "dose": null,
+            "cmax_nM": null,
+            "herg": {
+                "Kmax": 2.0,
+                "Ku": null
+            }
+        });
+        let cleaned = clean_null_values(&raw_with_nulls);
+        let cleaned_str = serde_json::to_string(&cleaned).unwrap();
+        assert!(!cleaned_str.contains("dose"));
+        assert!(!cleaned_str.contains("cmax_nM"));
+        assert!(!cleaned_str.contains("Ku"));
     }
 }
