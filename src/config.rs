@@ -16,6 +16,7 @@ pub struct Config {
     pub frontend_origin: Vec<String>,
     pub cookie_samesite: String,
     pub hf_space_base: String,
+    pub sim_api_key: Option<String>,
 }
 
 impl Config {
@@ -52,6 +53,16 @@ impl Config {
 
         let cookie_samesite = env::var("COOKIE_SAMESITE").unwrap_or_else(|_| "lax".to_string());
         let hf_space_base = env::var("HF_SPACE_BASE").context("HF_SPACE_BASE must be set in the environment")?;
+        let sim_api_key = env::var("SIM_API_KEY")
+            .ok()
+            .and_then(|s| {
+                let trimmed = s.trim().to_string();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed)
+                }
+            });
 
         Ok(Self {
             database_url,
@@ -67,7 +78,7 @@ impl Config {
             frontend_origin,
             cookie_samesite,
             hf_space_base,
+            sim_api_key,
         })
     }
-
 }
