@@ -39,6 +39,10 @@ async fn healthz(
     Ok("OK")
 }
 
+async fn livez() -> &'static str {
+    "ok"
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let _ = dotenvy::dotenv();
@@ -169,6 +173,7 @@ async fn main() -> anyhow::Result<()> {
         .nest("/admin", admin::router())
         .route("/healthz", get(healthz))
         .layer(middleware)
+        .route("/livez", get(livez))
         .with_state(state);
 
     // 8. Start server
@@ -182,4 +187,33 @@ async fn main() -> anyhow::Result<()> {
     .await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_livez_handler() {
+        assert_eq!(livez().await, "ok");
+    }
+
+    #[tokio::test]
+    async fn test_livez_route() {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+
+        let app = Router::new().route("/livez", get(livez));
+        let response = app
+            .oneshot(Request::builder().uri("/livez").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(&body[..], b"ok");
+    }
 }
