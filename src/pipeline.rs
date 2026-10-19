@@ -675,7 +675,7 @@ async fn run_pipeline_job(job_id: Uuid, user_id: Uuid, state: AppState) {
     let sim_start = Instant::now();
 
     let sim_res_result = tokio::time::timeout(
-        Duration::from_secs(240),
+        Duration::from_secs(480),
         call_gradio(
             &state.http_client,
             &state.config.hf_space_base,
@@ -694,7 +694,7 @@ async fn run_pipeline_job(job_id: Uuid, user_id: Uuid, state: AppState) {
             return;
         }
         Err(_) => {
-            mark_job_failed(&state.db, job_id, "Simulation timed out after 240 seconds").await;
+            mark_job_failed(&state.db, job_id, "Simulation timed out after 480 seconds").await;
             return;
         }
     };
@@ -1115,6 +1115,76 @@ mod tests {
         assert_eq!(res_obj["engine_version"], "1.0.0");
         assert_eq!(res_obj["elapsed_s"], 42.5);
         assert!(res_obj.contains_key("raw_metrics"));
+    }
+
+    #[test]
+    fn test_parse_simulate_response_multi_dose() {
+        let fixture = json!([
+            {
+                "ok": true,
+                "params": {
+                    "drug": "cisapride",
+                    "cmax_nM": 10.0,
+                    "doses": [1.0, 2.0, 3.0, 4.0]
+                },
+                "ratios": [0.62, 0.99, 1.0, -1.0, 1.4, 1.5, -0.6, 1.05, 1.0, 1.1, 1.05],
+                "dose_mode": "mean_1_to_4",
+                "doses": [1.0, 2.0, 3.0, 4.0],
+                "per_dose": {
+                    "1x": {"raw_metrics": {"qNet": 0.5}},
+                    "2x": {"raw_metrics": {"qNet": 0.45}},
+                    "3x": {"raw_metrics": {"qNet": 0.4}},
+                    "4x": {"raw_metrics": {"qNet": 0.35}}
+                },
+                "excluded_doses": [],
+                "traces_by_dose": {
+                    "1x": [1.0, 2.0],
+                    "2x": [1.0, 2.0]
+                },
+                "raw_metrics": {"qNet": 0.425},
+                "control_metrics": {"qNet": 0.8},
+                "flags": [],
+                "trace": [1.0, 2.0],
+                "control_trace": [1.0, 2.1],
+                "conc_nM": [10.0, 20.0, 30.0, 40.0],
+                "elapsed_s": 120.5,
+                "engine_version": "1.0.0"
+            }
+        ]);
+
+        let parsed = parse_simulate_response(&fixture);
+        assert!(parsed.is_ok(), "Expected Ok but got: {:?}", parsed.err());
+        let (params, ratios, sim_result) = parsed.unwrap();
+
+        assert_eq!(params["drug"], "cisapride");
+        assert_eq!(params["doses"], json!([1.0, 2.0, 3.0, 4.0]));
+
+        let ratios_arr = ratios.as_array().unwrap();
+        assert_eq!(ratios_arr.len(), 11);
+
+        let res_obj = sim_result.as_object().unwrap();
+        assert!(!res_obj.contains_key("ratios"));
+        assert!(!res_obj.contains_key("params"));
+
+        // Verify new multi-dose fields
+        assert_eq!(res_obj["dose_mode"], "mean_1_to_4");
+        assert_eq!(res_obj["doses"], json!([1.0, 2.0, 3.0, 4.0]));
+        assert!(res_obj.contains_key("per_dose"));
+        assert!(res_obj.contains_key("excluded_doses"));
+        assert!(res_obj.contains_key("traces_by_dose"));
+
+        // Verify conc_nM is preserved as an array and kept_beat being absent doesn't error
+        assert_eq!(res_obj["conc_nM"], json!([10.0, 20.0, 30.0, 40.0]));
+        assert!(!res_obj.contains_key("kept_beat"));
+
+        // Verify existing preserved fields
+        assert_eq!(res_obj["engine_version"], "1.0.0");
+        assert_eq!(res_obj["elapsed_s"], 120.5);
+        assert!(res_obj.contains_key("raw_metrics"));
+        assert!(res_obj.contains_key("control_metrics"));
+        assert!(res_obj.contains_key("flags"));
+        assert!(res_obj.contains_key("trace"));
+        assert!(res_obj.contains_key("control_trace"));
     }
 
     #[test]
