@@ -17,6 +17,9 @@ pub struct Config {
     pub cookie_samesite: String,
     pub hf_space_base: String,
     pub sim_api_key: Option<String>,
+    pub retention_trace_days: u32,
+    pub retention_trace_max_jobs_per_user: u32,
+    pub retention_apply_from: time::OffsetDateTime,
 }
 
 impl Config {
@@ -64,6 +67,27 @@ impl Config {
                 }
             });
 
+        // Trace retention bounds
+        // Semantics: Evict traces when a job is older than RETENTION_TRACE_DAYS OR exceeds
+        // RETENTION_TRACE_MAX_JOBS_PER_USER most recent runs, for jobs with created_at >= RETENTION_APPLY_FROM.
+        let retention_trace_days: u32 = env::var("RETENTION_TRACE_DAYS")
+            .unwrap_or_else(|_| "7".to_string())
+            .parse()
+            .context("RETENTION_TRACE_DAYS must be a valid u32 integer")?;
+
+        let retention_trace_max_jobs_per_user: u32 = env::var("RETENTION_TRACE_MAX_JOBS_PER_USER")
+            .unwrap_or_else(|_| "10".to_string())
+            .parse()
+            .context("RETENTION_TRACE_MAX_JOBS_PER_USER must be a valid u32 integer")?;
+
+        let retention_apply_from_str = env::var("RETENTION_APPLY_FROM")
+            .unwrap_or_else(|_| "2026-11-16T14:45:00Z".to_string());
+        let retention_apply_from = time::OffsetDateTime::parse(
+            &retention_apply_from_str,
+            &time::format_description::well_known::Rfc3339,
+        )
+        .context("RETENTION_APPLY_FROM must be a valid RFC 3339 timestamp (e.g. 2026-11-16T14:45:00Z)")?;
+
         Ok(Self {
             database_url,
             port,
@@ -79,6 +103,9 @@ impl Config {
             cookie_samesite,
             hf_space_base,
             sim_api_key,
+            retention_trace_days,
+            retention_trace_max_jobs_per_user,
+            retention_apply_from,
         })
     }
 }
