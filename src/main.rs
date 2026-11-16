@@ -11,6 +11,7 @@ mod state;
 mod telemetry;
 mod admin;
 mod pipeline;
+mod retention;
 
 use axum::{response::IntoResponse, routing::get, Router};
 use axum_login::AuthManagerLayerBuilder;
@@ -58,6 +59,37 @@ async fn main() -> anyhow::Result<()> {
 
     // Reset stale simulation jobs (non-fatal)
     pipeline::reset_stale_jobs(&db).await;
+
+    // Trace retention check at startup (non-fatal)
+    tracing::info!(
+        retention_days = config.retention_trace_days,
+        max_jobs_per_user = config.retention_trace_max_jobs_per_user,
+        apply_from = %config.retention_apply_from,
+        "Trace retention policy active (age limit: {} days, per-user cap: {} jobs, historical cutoff: {})",
+        config.retention_trace_days,
+        config.retention_trace_max_jobs_per_user,
+        config.retention_apply_from,
+    );
+    match retention::run_trace_eviction(
+        &db,
+        config.retention_trace_days,
+        config.retention_trace_max_jobs_per_user,
+        config.retention_apply_from,
+        None,
+    )
+    .await
+    {
+        Ok(evicted) => {
+            if evicted > 0 {
+                tracing::info!(evicted_count = evicted, "Startup trace retention eviction completed");
+            } else {
+                tracing::info!("Startup trace retention check completed (0 jobs evicted)");
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "Startup trace retention eviction failed (non-fatal)");
+        }
+    }
 
     // 4. Setup Session Store (axum-login requirement)
     let session_store = PostgresStore::new(db.clone());
@@ -180,6 +212,38 @@ async fn main() -> anyhow::Result<()> {
     let addr = format!("0.0.0.0:{}", config.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("listening on {}", addr);
+
+    // Periodic trace retention background task (every 1 hour)
+    let retention_db = db.clone();
+    let retention_days = config.retention_trace_days;
+    let retention_cap = config.retention_trace_max_jobs_per_user;
+    let retention_apply_from = config.retention_apply_from;
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+        interval.tick().await; // skip initial tick since startup check already ran
+        loop {
+            interval.tick().await;
+            match retention::run_trace_eviction(
+                &retention_db,
+                retention_days,
+                retention_cap,
+                retention_apply_from,
+                None,
+            )
+            .await
+            {
+                Ok(evicted) => {
+                    if evicted > 0 {
+                        tracing::info!(evicted_count = evicted, "Periodic trace retention eviction completed");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Periodic trace retention eviction failed (non-fatal)");
+                }
+            }
+        }
+    });
+
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
