@@ -45,10 +45,10 @@ impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, error_message) = match &self {
             AppError::Database(err) => {
-                if let Some(db_err) = err.as_database_error() {
-                    if db_err.code().as_deref() == Some("23505") { // unique violation
-                        return (StatusCode::CONFLICT, Json(json!({"error": "Conflict"}))).into_response();
-                    }
+                if let Some(db_err) = err.as_database_error()
+                    && db_err.code().as_deref() == Some("23505")
+                {
+                    return (StatusCode::CONFLICT, Json(json!({"error": "Conflict"}))).into_response();
                 }
                 error!("Database error: {:?}", err);
                 (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string())
