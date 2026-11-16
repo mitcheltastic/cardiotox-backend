@@ -72,6 +72,7 @@ pub struct ActiveJobDetailsResponse {
     pub id: Uuid,
     pub status: String,
     pub request: Value,
+    pub input_mode: Option<String>,
     pub error: Option<String>,
     #[serde(with = "time::serde::iso8601")]
     pub created_at: OffsetDateTime,
@@ -87,6 +88,7 @@ pub struct CompleteJobDetailsResponse {
     pub id: Uuid,
     pub status: String,
     pub request: Value,
+    pub input_mode: Option<String>,
     pub error: Option<String>,
     #[serde(with = "time::serde::iso8601")]
     pub created_at: OffsetDateTime,
@@ -131,6 +133,7 @@ pub struct SimulationJobRow {
     pub started_at: Option<OffsetDateTime>,
     #[serde(default, with = "time::serde::iso8601::option")]
     pub finished_at: Option<OffsetDateTime>,
+    pub input_mode: Option<String>,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -318,6 +321,18 @@ pub fn validate_pipeline_request(payload: &PipelineJobPayload) -> Result<(), App
     Ok(())
 }
 
+pub fn determine_pipeline_input_mode(payload: &PipelineJobPayload) -> &'static str {
+    let has_drug = payload.drug.is_some();
+    let has_herg = payload.herg.is_some();
+    let has_ic50 = payload.ic50.is_some();
+    match (has_drug, has_herg || has_ic50) {
+        (true, false) => "cipa_drug",
+        (false, true) => "new_drug",
+        (true, true) => "cipa_drug_custom_data",
+        (false, false) => "cipa_drug",
+    }
+}
+
 async fn create_job(
     State(state): State<AppState>,
     auth_session: AuthSession,
@@ -356,18 +371,20 @@ async fn create_job(
             .into_response());
     }
 
+    let input_mode = determine_pipeline_input_mode(&payload);
     let req_val =
         serde_json::to_value(&payload).map_err(|e| AppError::Other(anyhow::anyhow!(e)))?;
 
     let (job_id,): (Uuid,) = sqlx::query_as(
         r#"
-        INSERT INTO simulation_jobs (user_id, status, request)
-        VALUES ($1, 'queued', $2)
+        INSERT INTO simulation_jobs (user_id, status, request, input_mode)
+        VALUES ($1, 'queued', $2, $3)
         RETURNING id
         "#,
     )
     .bind(user.id)
     .bind(&req_val)
+    .bind(input_mode)
     .fetch_one(&state.db)
     .await?;
 
@@ -387,7 +404,7 @@ async fn get_job(
         r#"
         SELECT id, user_id, status, request, n_samples, sim_params, ratios, sim_result,
                prediction_id, prediction, explanation, error, sim_latency_ms,
-               created_at, started_at, finished_at
+               created_at, started_at, finished_at, input_mode
         FROM simulation_jobs
         WHERE id = $1
         "#,
@@ -408,6 +425,7 @@ async fn get_job(
             id: job.id,
             status: job.status,
             request: job.request,
+            input_mode: job.input_mode,
             error: job.error,
             created_at: job.created_at,
             started_at: job.started_at,
@@ -419,6 +437,7 @@ async fn get_job(
             id: job.id,
             status: job.status,
             request: job.request,
+            input_mode: job.input_mode,
             error: job.error,
             created_at: job.created_at,
             started_at: job.started_at,
@@ -811,9 +830,10 @@ async fn run_pipeline_job(job_id: Uuid, user_id: Uuid, state: AppState) {
         r#"
         INSERT INTO prediction_logs (
             id, user_id, input, predicted_tier, probabilities, latency_ms,
-            prediction_set, recommended_action, is_ambiguous, out_of_distribution, alpha, q_hat
+            prediction_set, recommended_action, is_ambiguous, out_of_distribution, alpha, q_hat,
+            source, job_id
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'pipeline', $13)
         "#,
     )
     .bind(prediction_id)
@@ -828,6 +848,7 @@ async fn run_pipeline_job(job_id: Uuid, user_id: Uuid, state: AppState) {
     .bind(out_of_distribution)
     .bind(alpha)
     .bind(q_hat)
+    .bind(job_id)
     .execute(&state.db)
     .await
     {
@@ -918,12 +939,47 @@ async fn run_pipeline_job(job_id: Uuid, user_id: Uuid, state: AppState) {
         mark_job_failed(&state.db, job_id, &safe_err).await;
     } else {
         tracing::info!("Simulation job {} completed successfully", job_id);
+        // Opportunistic trace retention eviction for this user (non-fatal)
+        if let Err(e) = crate::retention::run_trace_eviction(
+            &state.db,
+            state.config.retention_trace_days,
+            state.config.retention_trace_max_jobs_per_user,
+            state.config.retention_apply_from,
+            Some(user_id),
+        )
+        .await
+        {
+            tracing::warn!(error = %e, user_id = %user_id, "Opportunistic trace retention eviction failed (non-fatal)");
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_determine_pipeline_input_mode() {
+        let p1 = PipelineJobPayload {
+            drug: Some("cisapride".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(determine_pipeline_input_mode(&p1), "cipa_drug");
+
+        let p2 = PipelineJobPayload {
+            cmax_nM: Some(10.0),
+            herg: Some(HergParams::default()),
+            ..Default::default()
+        };
+        assert_eq!(determine_pipeline_input_mode(&p2), "new_drug");
+
+        let p3 = PipelineJobPayload {
+            drug: Some("bepridil".to_string()),
+            herg: Some(HergParams::default()),
+            ..Default::default()
+        };
+        assert_eq!(determine_pipeline_input_mode(&p3), "cipa_drug_custom_data");
+    }
 
     #[test]
     fn test_valid_mode_1_drug_only() {
@@ -1222,6 +1278,7 @@ mod tests {
             id: Uuid::nil(),
             status: "simulating".to_string(),
             request: json!({"drug": "cisapride"}),
+            input_mode: Some("cipa_drug".to_string()),
             error: None,
             created_at: now,
             started_at: Some(now),
@@ -1251,6 +1308,7 @@ mod tests {
             id: Uuid::nil(),
             status: "done".to_string(),
             request: json!({"drug": "cisapride"}),
+            input_mode: Some("cipa_drug".to_string()),
             error: None,
             created_at: now,
             started_at: Some(now),

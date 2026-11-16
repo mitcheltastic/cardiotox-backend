@@ -249,6 +249,8 @@ pub struct PredictionLogRow {
     pub q_hat: Option<f64>,
     #[serde(with = "time::serde::iso8601")]
     pub created_at: OffsetDateTime,
+    pub source: String,
+    pub job_id: Option<Uuid>,
 }
 
 async fn list_prediction_logs(
@@ -261,7 +263,7 @@ async fn list_prediction_logs(
 
     let (items, total): (Vec<PredictionLogRow>, i64) = if let Some(uid) = filter.user_id.as_deref().and_then(|s| Uuid::parse_str(s).ok()) {
         let items = sqlx::query_as(
-            "SELECT id, user_id, input, predicted_tier, probabilities, latency_ms, prediction_set, recommended_action, is_ambiguous, out_of_distribution, alpha, q_hat, created_at FROM prediction_logs WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3"
+            "SELECT id, user_id, input, predicted_tier, probabilities, latency_ms, prediction_set, recommended_action, is_ambiguous, out_of_distribution, alpha, q_hat, created_at, source, job_id FROM prediction_logs WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3"
         )
         .bind(uid)
         .bind(limit)
@@ -277,7 +279,7 @@ async fn list_prediction_logs(
         (items, total.0)
     } else {
         let items = sqlx::query_as(
-            "SELECT id, user_id, input, predicted_tier, probabilities, latency_ms, prediction_set, recommended_action, is_ambiguous, out_of_distribution, alpha, q_hat, created_at FROM prediction_logs ORDER BY created_at DESC LIMIT $1 OFFSET $2"
+            "SELECT id, user_id, input, predicted_tier, probabilities, latency_ms, prediction_set, recommended_action, is_ambiguous, out_of_distribution, alpha, q_hat, created_at, source, job_id FROM prediction_logs ORDER BY created_at DESC LIMIT $1 OFFSET $2"
         )
         .bind(limit)
         .bind(offset)

@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Query, State},
+    extract::{Path, Query, State},
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
@@ -37,6 +37,7 @@ pub fn router() -> Router<AppState> {
         .route("/history/predictions", get(my_predictions))
         .route("/history/explanations", get(my_explanations))
         .route("/history/summary", get(my_summary))
+        .route("/history/runs/{prediction_id}", get(get_run_detail))
 }
 
 pub(crate) fn normalize_tier(raw: &str) -> String {
@@ -146,7 +147,7 @@ async fn predict(
         .map(normalize_tier);
     
     let probabilities = result.as_array()
-        .and_then(|arr| arr.get(0))
+        .and_then(|arr| arr.first())
         .and_then(|v| v.get("confidences"))
         .cloned();
 
@@ -187,9 +188,10 @@ async fn predict(
             r#"
             INSERT INTO prediction_logs (
                 id, user_id, input, predicted_tier, probabilities, latency_ms,
-                prediction_set, recommended_action, is_ambiguous, out_of_distribution, alpha, q_hat
+                prediction_set, recommended_action, is_ambiguous, out_of_distribution, alpha, q_hat,
+                source, job_id
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'digital_lab', NULL)
             "#,
         )
         .bind(prediction_id)
@@ -234,18 +236,18 @@ async fn explain(
     let elapsed = start.elapsed().as_millis() as i32;
 
     let predicted_class = result.as_array()
-        .and_then(|arr| arr.get(0))
+        .and_then(|arr| arr.first())
         .and_then(|v| v.get("predicted_class"))
         .and_then(|v| v.as_str())
         .map(normalize_tier);
 
     let base_value = result.as_array()
-        .and_then(|arr| arr.get(0))
+        .and_then(|arr| arr.first())
         .and_then(|v| v.get("base_value"))
         .and_then(|v| v.as_f64());
 
     let contributions = result.as_array()
-        .and_then(|arr| arr.get(0))
+        .and_then(|arr| arr.first())
         .and_then(|v| v.get("contributions"))
         .cloned();
 
@@ -288,7 +290,51 @@ pub struct HistoryFilter {
     pub pagination: PaginationParams,
 }
 
-#[derive(Serialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct InputMethodDescriptor {
+    pub method: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode_label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drug: Option<String>,
+}
+
+pub fn determine_input_method(
+    source: &str,
+    input_mode: Option<&str>,
+    job_request: Option<&serde_json::Value>,
+) -> InputMethodDescriptor {
+    if source == "pipeline" {
+        let mode = input_mode.map(str::to_string);
+        let mode_label = match mode.as_deref() {
+            Some("cipa_drug") => Some("CiPA drug".to_string()),
+            Some("new_drug") => Some("New drug".to_string()),
+            Some("cipa_drug_custom_data") => Some("CiPA drug + new lab data".to_string()),
+            _ => None,
+        };
+        let drug = job_request
+            .and_then(|r| r.get("drug"))
+            .and_then(|d| d.as_str())
+            .map(str::to_string);
+        InputMethodDescriptor {
+            method: "pipeline".to_string(),
+            mode,
+            mode_label,
+            drug,
+        }
+    } else {
+        InputMethodDescriptor {
+            method: "digital_lab".to_string(),
+            mode: None,
+            mode_label: None,
+            drug: None,
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
 pub struct HistoryPredictionRow {
     pub id: Uuid,
     pub input: serde_json::Value,
@@ -303,6 +349,56 @@ pub struct HistoryPredictionRow {
     pub q_hat: Option<f64>,
     #[serde(with = "time::serde::iso8601")]
     pub created_at: OffsetDateTime,
+    pub source: String,
+    pub job_id: Option<Uuid>,
+    pub input_method: InputMethodDescriptor,
+}
+
+#[derive(sqlx::FromRow)]
+struct DbPredictionRow {
+    id: Uuid,
+    input: serde_json::Value,
+    predicted_tier: Option<String>,
+    probabilities: Option<serde_json::Value>,
+    latency_ms: Option<i32>,
+    prediction_set: Option<serde_json::Value>,
+    recommended_action: Option<String>,
+    is_ambiguous: Option<bool>,
+    out_of_distribution: Option<bool>,
+    alpha: Option<f64>,
+    q_hat: Option<f64>,
+    created_at: OffsetDateTime,
+    source: String,
+    job_id: Option<Uuid>,
+    job_input_mode: Option<String>,
+    job_request: Option<serde_json::Value>,
+}
+
+impl DbPredictionRow {
+    fn into_history_row(self) -> HistoryPredictionRow {
+        let input_method = determine_input_method(
+            &self.source,
+            self.job_input_mode.as_deref(),
+            self.job_request.as_ref(),
+        );
+        HistoryPredictionRow {
+            id: self.id,
+            input: self.input,
+            predicted_tier: self.predicted_tier,
+            probabilities: self.probabilities,
+            latency_ms: self.latency_ms,
+            prediction_set: self.prediction_set,
+            recommended_action: self.recommended_action,
+            is_ambiguous: self.is_ambiguous,
+            out_of_distribution: self.out_of_distribution,
+            alpha: self.alpha,
+            q_hat: self.q_hat,
+            created_at: self.created_at,
+            source: self.source,
+            job_id: self.job_id,
+            input_method,
+        }
+    }
 }
 
 async fn my_predictions(
@@ -314,8 +410,19 @@ async fn my_predictions(
     let limit = filter.pagination.limit();
     let offset = filter.pagination.offset();
 
-    let items = sqlx::query_as::<_, HistoryPredictionRow>(
-        "SELECT id, input, predicted_tier, probabilities, latency_ms, prediction_set, recommended_action, is_ambiguous, out_of_distribution, alpha, q_hat, created_at FROM prediction_logs WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3"
+    let db_rows = sqlx::query_as::<_, DbPredictionRow>(
+        r#"
+        SELECT 
+            p.id, p.input, p.predicted_tier, p.probabilities, p.latency_ms,
+            p.prediction_set, p.recommended_action, p.is_ambiguous, p.out_of_distribution,
+            p.alpha, p.q_hat, p.created_at, p.source, p.job_id,
+            sj.input_mode AS job_input_mode, sj.request AS job_request
+        FROM prediction_logs p
+        LEFT JOIN simulation_jobs sj ON p.job_id = sj.id
+        WHERE p.user_id = $1 AND p.source != 'pipeline_dose'
+        ORDER BY p.created_at DESC
+        LIMIT $2 OFFSET $3
+        "#,
     )
     .bind(user.id)
     .bind(limit)
@@ -323,7 +430,9 @@ async fn my_predictions(
     .fetch_all(&state.db)
     .await?;
 
-    let total: (i64,) = sqlx::query_as("SELECT count(*) FROM prediction_logs WHERE user_id = $1")
+    let items: Vec<HistoryPredictionRow> = db_rows.into_iter().map(|r| r.into_history_row()).collect();
+
+    let total: (i64,) = sqlx::query_as("SELECT count(*) FROM prediction_logs WHERE user_id = $1 AND source != 'pipeline_dose'")
         .bind(user.id)
         .fetch_one(&state.db)
         .await?;
@@ -354,7 +463,14 @@ async fn my_explanations(
     let offset = filter.pagination.offset();
 
     let items = sqlx::query_as::<_, HistoryExplanationRow>(
-        "SELECT id, prediction_id, input, predicted_class, base_value, contributions, latency_ms, created_at FROM shap_logs WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3"
+        r#"
+        SELECT s.id, s.prediction_id, s.input, s.predicted_class, s.base_value, s.contributions, s.latency_ms, s.created_at
+        FROM shap_logs s
+        JOIN prediction_logs p ON s.prediction_id = p.id
+        WHERE s.user_id = $1 AND p.source != 'pipeline_dose'
+        ORDER BY s.created_at DESC
+        LIMIT $2 OFFSET $3
+        "#,
     )
     .bind(user.id)
     .bind(limit)
@@ -362,12 +478,25 @@ async fn my_explanations(
     .fetch_all(&state.db)
     .await?;
 
-    let total: (i64,) = sqlx::query_as("SELECT count(*) FROM shap_logs WHERE user_id = $1")
-        .bind(user.id)
-        .fetch_one(&state.db)
-        .await?;
+    let total: (i64,) = sqlx::query_as(
+        r#"
+        SELECT count(*)
+        FROM shap_logs s
+        JOIN prediction_logs p ON s.prediction_id = p.id
+        WHERE s.user_id = $1 AND p.source != 'pipeline_dose'
+        "#
+    )
+    .bind(user.id)
+    .fetch_one(&state.db)
+    .await?;
 
     Ok(Json(PaginatedResponse { items, limit, offset, total: total.0 }))
+}
+
+#[derive(Serialize)]
+pub struct RetentionPolicyResponse {
+    pub trace_retention_days: u32,
+    pub trace_max_jobs_per_user: u32,
 }
 
 #[derive(Serialize)]
@@ -375,6 +504,8 @@ pub struct HistorySummaryResponse {
     pub total_predictions: i64,
     pub total_explanations: i64,
     pub tier_counts: serde_json::Value,
+    pub traces_available_count: i64,
+    pub retention_policy: RetentionPolicyResponse,
 }
 
 async fn my_summary(
@@ -383,15 +514,36 @@ async fn my_summary(
 ) -> Result<impl IntoResponse, AppError> {
     let user = auth_session.user.ok_or(AppError::Unauthorized)?;
 
-    let pred_count: (i64,) = sqlx::query_as("SELECT count(*) FROM prediction_logs WHERE user_id = $1")
+    let pred_count: (i64,) = sqlx::query_as("SELECT count(*) FROM prediction_logs WHERE user_id = $1 AND source != 'pipeline_dose'")
         .bind(user.id)
         .fetch_one(&state.db)
         .await?;
 
-    let expl_count: (i64,) = sqlx::query_as("SELECT count(*) FROM shap_logs WHERE user_id = $1")
-        .bind(user.id)
-        .fetch_one(&state.db)
-        .await?;
+    let expl_count: (i64,) = sqlx::query_as(
+        r#"
+        SELECT count(DISTINCT s.prediction_id)
+        FROM shap_logs s
+        JOIN prediction_logs p ON s.prediction_id = p.id
+        WHERE s.user_id = $1 AND p.source != 'pipeline_dose'
+        "#
+    )
+    .bind(user.id)
+    .fetch_one(&state.db)
+    .await?;
+
+    let traces_available_count: (i64,) = sqlx::query_as(
+        r#"
+        SELECT count(*)
+        FROM simulation_jobs
+        WHERE user_id = $1
+          AND status = 'done'
+          AND traces_evicted_at IS NULL
+          AND sim_result IS NOT NULL
+        "#,
+    )
+    .bind(user.id)
+    .fetch_one(&state.db)
+    .await?;
 
     #[derive(sqlx::FromRow)]
     struct TierCount {
@@ -399,7 +551,7 @@ async fn my_summary(
         count: i64,
     }
     
-    let tier_rows = sqlx::query_as::<_, TierCount>("SELECT predicted_tier, count(*) as count FROM prediction_logs WHERE user_id = $1 GROUP BY predicted_tier")
+    let tier_rows = sqlx::query_as::<_, TierCount>("SELECT predicted_tier, count(*) as count FROM prediction_logs WHERE user_id = $1 AND source != 'pipeline_dose' GROUP BY predicted_tier")
         .bind(user.id)
         .fetch_all(&state.db)
         .await?;
@@ -414,6 +566,215 @@ async fn my_summary(
         total_predictions: pred_count.0,
         total_explanations: expl_count.0,
         tier_counts: serde_json::Value::Object(tier_counts),
+        traces_available_count: traces_available_count.0,
+        retention_policy: RetentionPolicyResponse {
+            trace_retention_days: state.config.retention_trace_days,
+            trace_max_jobs_per_user: state.config.retention_trace_max_jobs_per_user,
+        },
+    }))
+}
+
+#[derive(Deserialize)]
+pub struct RunDetailQuery {
+    pub include_traces: Option<bool>,
+}
+
+#[derive(Serialize)]
+pub struct PipelineTraces {
+    pub trace: Option<serde_json::Value>,
+    pub control_trace: Option<serde_json::Value>,
+    pub traces_by_dose: Option<serde_json::Value>,
+}
+
+#[derive(Serialize)]
+pub struct PipelineRunDetail {
+    pub job_id: Uuid,
+    pub status: String,
+    pub input_mode: Option<String>,
+    pub sim_params: Option<serde_json::Value>,
+    pub ratios: Option<serde_json::Value>,
+    pub raw_metrics: Option<serde_json::Value>,
+    pub control_metrics: Option<serde_json::Value>,
+    pub per_dose: Option<serde_json::Value>,
+    pub doses: Option<serde_json::Value>,
+    pub dose_mode: Option<serde_json::Value>,
+    pub sim_latency_ms: Option<i32>,
+    pub traces_evicted: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(with = "time::serde::iso8601::option")]
+    pub traces_evicted_at: Option<OffsetDateTime>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub traces: Option<PipelineTraces>,
+}
+
+#[derive(Serialize)]
+pub struct RunDetailResponse {
+    pub prediction: HistoryPredictionRow,
+    pub explanation: Option<HistoryExplanationRow>,
+    pub pipeline: Option<PipelineRunDetail>,
+}
+
+async fn get_run_detail(
+    State(state): State<AppState>,
+    auth_session: AuthSession,
+    Path(prediction_id): Path<Uuid>,
+    Query(query): Query<RunDetailQuery>,
+) -> Result<impl IntoResponse, AppError> {
+    let user = auth_session.user.ok_or(AppError::Unauthorized)?;
+    let is_admin = user.role == "admin";
+
+    #[derive(sqlx::FromRow)]
+    struct RunDbPredictionRow {
+        id: Uuid,
+        user_id: Option<Uuid>,
+        input: serde_json::Value,
+        predicted_tier: Option<String>,
+        probabilities: Option<serde_json::Value>,
+        latency_ms: Option<i32>,
+        prediction_set: Option<serde_json::Value>,
+        recommended_action: Option<String>,
+        is_ambiguous: Option<bool>,
+        out_of_distribution: Option<bool>,
+        alpha: Option<f64>,
+        q_hat: Option<f64>,
+        created_at: OffsetDateTime,
+        source: String,
+        job_id: Option<Uuid>,
+        job_input_mode: Option<String>,
+        job_request: Option<serde_json::Value>,
+    }
+
+    let pred_row: Option<RunDbPredictionRow> = sqlx::query_as(
+        r#"
+        SELECT 
+            p.id, p.user_id, p.input, p.predicted_tier, p.probabilities, p.latency_ms,
+            p.prediction_set, p.recommended_action, p.is_ambiguous, p.out_of_distribution,
+            p.alpha, p.q_hat, p.created_at, p.source, p.job_id,
+            sj.input_mode AS job_input_mode, sj.request AS job_request
+        FROM prediction_logs p
+        LEFT JOIN simulation_jobs sj ON p.job_id = sj.id
+        WHERE p.id = $1
+        "#,
+    )
+    .bind(prediction_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let pred_row = match pred_row {
+        Some(r) => r,
+        None => return Err(AppError::NotFound("Run not found".into())),
+    };
+
+    if !is_admin && pred_row.user_id != Some(user.id) {
+        return Err(AppError::NotFound("Run not found".into()));
+    }
+
+    let input_method = determine_input_method(
+        &pred_row.source,
+        pred_row.job_input_mode.as_deref(),
+        pred_row.job_request.as_ref(),
+    );
+
+    let prediction = HistoryPredictionRow {
+        id: pred_row.id,
+        input: pred_row.input,
+        predicted_tier: pred_row.predicted_tier,
+        probabilities: pred_row.probabilities,
+        latency_ms: pred_row.latency_ms,
+        prediction_set: pred_row.prediction_set,
+        recommended_action: pred_row.recommended_action,
+        is_ambiguous: pred_row.is_ambiguous,
+        out_of_distribution: pred_row.out_of_distribution,
+        alpha: pred_row.alpha,
+        q_hat: pred_row.q_hat,
+        created_at: pred_row.created_at,
+        source: pred_row.source.clone(),
+        job_id: pred_row.job_id,
+        input_method,
+    };
+
+    let explanation: Option<HistoryExplanationRow> = sqlx::query_as(
+        r#"
+        SELECT id, prediction_id, input, predicted_class, base_value, contributions, latency_ms, created_at
+        FROM shap_logs
+        WHERE prediction_id = $1
+        ORDER BY created_at DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(prediction_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let include_traces = query.include_traces.unwrap_or(false);
+    let pipeline = if let Some(job_id) = pred_row.job_id {
+        #[derive(sqlx::FromRow)]
+        struct SimJobData {
+            id: Uuid,
+            status: String,
+            input_mode: Option<String>,
+            sim_params: Option<serde_json::Value>,
+            ratios: Option<serde_json::Value>,
+            sim_result: Option<serde_json::Value>,
+            sim_latency_ms: Option<i32>,
+            traces_evicted_at: Option<OffsetDateTime>,
+        }
+
+        let job_data: Option<SimJobData> = sqlx::query_as(
+            r#"
+            SELECT id, status, input_mode, sim_params, ratios, sim_result, sim_latency_ms, traces_evicted_at
+            FROM simulation_jobs
+            WHERE id = $1
+            "#,
+        )
+        .bind(job_id)
+        .fetch_optional(&state.db)
+        .await?;
+
+        job_data.map(|j| {
+            let res = j.sim_result.as_ref();
+            let per_dose = res.and_then(|r| r.get("per_dose")).cloned();
+            let raw_metrics = res.and_then(|r| r.get("raw_metrics")).cloned();
+            let control_metrics = res.and_then(|r| r.get("control_metrics")).cloned();
+            let doses = res.and_then(|r| r.get("doses")).cloned();
+            let dose_mode = res.and_then(|r| r.get("dose_mode")).cloned();
+            let traces_evicted = j.traces_evicted_at.is_some();
+
+            let traces = if include_traces && !traces_evicted {
+                res.map(|r| PipelineTraces {
+                    trace: r.get("trace").cloned(),
+                    control_trace: r.get("control_trace").cloned(),
+                    traces_by_dose: r.get("traces_by_dose").cloned(),
+                })
+            } else {
+                None
+            };
+
+            PipelineRunDetail {
+                job_id: j.id,
+                status: j.status,
+                input_mode: j.input_mode,
+                sim_params: j.sim_params,
+                ratios: j.ratios,
+                raw_metrics,
+                control_metrics,
+                per_dose,
+                doses,
+                dose_mode,
+                sim_latency_ms: j.sim_latency_ms,
+                traces_evicted,
+                traces_evicted_at: j.traces_evicted_at,
+                traces,
+            }
+        })
+    } else {
+        None
+    };
+
+    Ok(Json(RunDetailResponse {
+        prediction,
+        explanation,
+        pipeline,
     }))
 }
 
@@ -479,6 +840,93 @@ mod tests {
             }
             other => panic!("Expected AppError::Validation, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_determine_input_method() {
+        // Digital Lab
+        let dl = determine_input_method("digital_lab", None, None);
+        assert_eq!(dl.method, "digital_lab");
+        assert_eq!(dl.mode, None);
+        assert_eq!(dl.drug, None);
+
+        // Pipeline Mode 1
+        let req1 = serde_json::json!({ "drug": "cisapride" });
+        let p1 = determine_input_method("pipeline", Some("cipa_drug"), Some(&req1));
+        assert_eq!(p1.method, "pipeline");
+        assert_eq!(p1.mode.as_deref(), Some("cipa_drug"));
+        assert_eq!(p1.mode_label.as_deref(), Some("CiPA drug"));
+        assert_eq!(p1.drug.as_deref(), Some("cisapride"));
+
+        // Pipeline Mode 2
+        let req2 = serde_json::json!({ "cmax_nM": 10.0, "herg": {} });
+        let p2 = determine_input_method("pipeline", Some("new_drug"), Some(&req2));
+        assert_eq!(p2.method, "pipeline");
+        assert_eq!(p2.mode.as_deref(), Some("new_drug"));
+        assert_eq!(p2.mode_label.as_deref(), Some("New drug"));
+        assert_eq!(p2.drug, None);
+
+        // Pipeline Mode 3
+        let req3 = serde_json::json!({ "drug": "bepridil", "herg": {} });
+        let p3 = determine_input_method("pipeline", Some("cipa_drug_custom_data"), Some(&req3));
+        assert_eq!(p3.method, "pipeline");
+        assert_eq!(p3.mode.as_deref(), Some("cipa_drug_custom_data"));
+        assert_eq!(p3.mode_label.as_deref(), Some("CiPA drug + new lab data"));
+        assert_eq!(p3.drug.as_deref(), Some("bepridil"));
+    }
+
+    #[test]
+    fn test_run_detail_response_serialization() {
+        let input_method = determine_input_method("digital_lab", None, None);
+        let pred = HistoryPredictionRow {
+            id: Uuid::nil(),
+            input: serde_json::json!([1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
+            predicted_tier: Some("Low".to_string()),
+            probabilities: Some(serde_json::json!([{"confidence": 0.9, "label": "low"}])),
+            latency_ms: Some(100),
+            prediction_set: Some(serde_json::json!(["low"])),
+            recommended_action: Some("Low".to_string()),
+            is_ambiguous: Some(false),
+            out_of_distribution: Some(false),
+            alpha: Some(0.1),
+            q_hat: Some(0.5),
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            source: "digital_lab".to_string(),
+            job_id: None,
+            input_method,
+        };
+
+        let run_dl = RunDetailResponse {
+            prediction: pred.clone(),
+            explanation: None,
+            pipeline: None,
+        };
+        let val_dl = serde_json::to_value(&run_dl).unwrap();
+        assert_eq!(val_dl["prediction"]["source"], "digital_lab");
+        assert!(val_dl["explanation"].is_null());
+        assert!(val_dl["pipeline"].is_null());
+
+        let pipeline_detail_no_traces = PipelineRunDetail {
+            job_id: Uuid::nil(),
+            status: "done".to_string(),
+            input_mode: Some("cipa_drug".to_string()),
+            sim_params: None,
+            ratios: None,
+            raw_metrics: Some(serde_json::json!({"qNet": 68.0})),
+            control_metrics: Some(serde_json::json!({"qNet": 70.0})),
+            per_dose: None,
+            doses: None,
+            dose_mode: None,
+            sim_latency_ms: Some(200),
+            traces_evicted: false,
+            traces_evicted_at: None,
+            traces: None,
+        };
+        let val_pipe = serde_json::to_value(&pipeline_detail_no_traces).unwrap();
+        assert!(!val_pipe.as_object().unwrap().contains_key("traces"));
+        assert_eq!(val_pipe["traces_evicted"], false);
+        assert_eq!(val_pipe["control_metrics"]["qNet"], 70.0);
+        assert_eq!(val_pipe["raw_metrics"]["qNet"], 68.0);
     }
 }
 
